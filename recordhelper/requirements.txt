@@ -1,0 +1,7 @@
+line-bot-sdk
+openai
+google-generativeai
+Flask
+python-dotenv
+requests
+pydub 
