@@ -922,7 +922,7 @@ class AsyncLineBotService:
                     user_id, transcribed_text, summary_text, processing_time, text_length
                 )
                 # 假設部署在 localhost:5001，實際使用時應該用真實域名
-                html_link = f"\n\n🌐 美化顯示：https://linebot.audiweb.uk/summary/{summary_id}"
+                html_link = f"\n\n🌐 美化顯示：https://chatbot.audiweb.uk/summary/{summary_id}"
                 logging.info(f"生成摘要頁面: {summary_id}")
             except Exception as e:
                 logging.error(f"生成摘要頁面失敗: {e}")
