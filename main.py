@@ -13,9 +13,10 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import json
 import hashlib
+import markdown
 
 from dotenv import load_dotenv
-from flask import Flask, request, abort, jsonify
+from flask import Flask, request, abort, jsonify, render_template_string
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, PushMessageRequest, ReplyMessageRequest, \
@@ -28,6 +29,53 @@ import requests
 
 # 載入環境變數
 load_dotenv()
+
+
+# 摘要存儲管理器
+class SummaryStorage:
+    """摘要存儲管理器"""
+    
+    def __init__(self):
+        self.summaries: Dict[str, Dict] = {}
+        self.lock = threading.Lock()
+    
+    def store_summary(self, user_id: str, transcribed_text: str, summary_text: str, 
+                     processing_time: float, text_length: int) -> str:
+        """存儲摘要並返回ID"""
+        with self.lock:
+            summary_id = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:12]
+            
+            self.summaries[summary_id] = {
+                'user_id': user_id,
+                'transcribed_text': transcribed_text,
+                'summary_text': summary_text,
+                'processing_time': processing_time,
+                'text_length': text_length,
+                'created_at': datetime.now(),
+                'estimated_minutes': text_length / 180
+            }
+            
+            return summary_id
+    
+    def get_summary(self, summary_id: str) -> Optional[Dict]:
+        """獲取摘要"""
+        with self.lock:
+            return self.summaries.get(summary_id)
+    
+    def cleanup_old_summaries(self, hours: int = 24):
+        """清理舊摘要"""
+        with self.lock:
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            expired_ids = [
+                sid for sid, info in self.summaries.items()
+                if info['created_at'] < cutoff_time
+            ]
+            
+            for sid in expired_ids:
+                del self.summaries[sid]
+            
+            if expired_ids:
+                logging.info(f"清理了 {len(expired_ids)} 個過期摘要")
 
 
 # 處理狀態管理
@@ -665,6 +713,7 @@ class AsyncLineBotService:
         self.ai_service = AIService(config)
         self.audio_service = AudioService()
         self.processing_status = ProcessingStatus()
+        self.summary_storage = SummaryStorage()
 
         # 線程池用於異步處理
         self.executor = ThreadPoolExecutor(max_workers=config.max_workers)
@@ -682,6 +731,7 @@ class AsyncLineBotService:
                 try:
                     time.sleep(3600)  # 每小時執行一次
                     self.processing_status.cleanup_old_records()
+                    self.summary_storage.cleanup_old_summaries()
                     logging.info("完成定期清理任務")
                 except Exception as e:
                     logging.error(f"清理任務錯誤: {e}")
@@ -863,11 +913,25 @@ class AsyncLineBotService:
         is_summary_failed = ("摘要功能暫時無法使用" in summary_text or 
                            "建議查看完整逐字稿" in summary_text)
         
+        # 生成 HTML 摘要頁面
+        summary_id = None
+        html_link = ""
+        if not is_summary_failed:
+            try:
+                summary_id = self.summary_storage.store_summary(
+                    user_id, transcribed_text, summary_text, processing_time, text_length
+                )
+                # 假設部署在 localhost:5001，實際使用時應該用真實域名
+                html_link = f"\n\n🌐 美化顯示：https://linebot.audiweb.uk/summary/{summary_id}"
+                logging.info(f"生成摘要頁面: {summary_id}")
+            except Exception as e:
+                logging.error(f"生成摘要頁面失敗: {e}")
+        
         if is_summary_failed:
             # 摘要失敗時，確保提供完整轉錄文字
             reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 摘要狀態：\n{summary_text}{length_info}{time_info}"
         else:
-            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 重點摘要：\n{summary_text}{length_info}{time_info}"
+            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 重點摘要：\n{summary_text}{length_info}{time_info}{html_link}"
 
         # 分割長訊息（更智能的分割）
         if len(reply_text) > 4500:
@@ -878,7 +942,7 @@ class AsyncLineBotService:
             if is_summary_failed:
                 messages.append(f"📝 摘要狀態：\n{summary_text}{length_info}{time_info}")
             else:
-                messages.append(f"📝 重點摘要：\n{summary_text}{length_info}{time_info}")
+                messages.append(f"📝 重點摘要：\n{summary_text}{length_info}{time_info}{html_link}")
         else:
             messages = [reply_text]
 
@@ -934,15 +998,20 @@ class AsyncLineBotService:
         with self.processing_status.lock:
             processing_count = len(self.processing_status.processing_messages)
             completed_count = len(self.processing_status.completed_messages)
+        
+        with self.summary_storage.lock:
+            summary_count = len(self.summary_storage.summaries)
 
         return (f"📊 系統狀態\n"
                 f"• 處理中訊息: {processing_count}\n"
                 f"• 已完成訊息: {completed_count}\n"
+                f"• 已存儲摘要: {summary_count}\n"
                 f"• 線程池大小: {self.config.max_workers}\n"
                 f"• FFmpeg: {'✅' if self.audio_service.check_ffmpeg() else '❌'}\n"
                 f"• API金鑰數量: {len(self.config.google_api_keys)}\n"
                 f"• 完整分析: {'✅ 啟用' if self.config.full_analysis else '❌ 智能選取'}\n"
-                f"• 最大分析段數: {self.config.max_segments_for_full_analysis}")
+                f"• 最大分析段數: {self.config.max_segments_for_full_analysis}\n"
+                f"• HTML美化顯示: ✅ 已啟用")
 
     def _safe_reply(self, line_api: MessagingApi, reply_token: str, messages: List[TextMessage]):
         """安全回覆"""
@@ -1003,12 +1072,14 @@ def create_app() -> Flask:
                     <h3>🚀 超高性能優化</h3>
                     <ul>
                         <li>💪 極限輸出：60,000 tokens 最大摘要長度</li>
+                        <li>🌐 HTML美化：markdown 格式完美顯示</li>
                         <li>🔄 異步處理：避免重複訊息問題</li>
                         <li>⚡ 快速回應：立即確認收到錄音</li>
                         <li>📊 狀態管理：智能處理重複請求</li>
                         <li>⏱️ 超時保護：25秒內必定有回應</li>
                         <li>🧵 多線程：支援同時處理多個請求</li>
                         <li>📝 詳盡摘要：支援超長錄音完整分析</li>
+                        <li>🎨 美化頁面：專業級摘要展示體驗</li>
                     </ul>
                 </div>
 
@@ -1022,6 +1093,21 @@ def create_app() -> Flask:
                     <p><strong>API金鑰數量：</strong> {len(config.google_api_keys)}</p>
                     <p><strong>完整分析：</strong> {'✅ 啟用' if config.full_analysis else '❌ 智能選取'}</p>
                     <p><strong>最大分析段數：</strong> {config.max_segments_for_full_analysis}</p>
+                    
+                    <div style="margin-top: 20px; text-align: center;">
+                        <a href="/summaries" style="
+                            display: inline-block;
+                            background: #667eea;
+                            color: white;
+                            text-decoration: none;
+                            padding: 12px 24px;
+                            border-radius: 25px;
+                            font-weight: bold;
+                            transition: background 0.3s;
+                        " onmouseover="this.style.background='#5a6fd8'" onmouseout="this.style.background='#667eea'">
+                            📚 查看摘要管理
+                        </a>
+                    </div>
                 </div>
             </div>
         </body>
@@ -1083,6 +1169,378 @@ def create_app() -> Flask:
                 "error": str(e),
                 "api_keys_count": len(config.google_api_keys)
             }), 500
+
+    @app.route("/summary/<summary_id>", methods=['GET'])
+    def view_summary(summary_id):
+        """查看美化後的摘要頁面"""
+        summary_data = linebot_service.summary_storage.get_summary(summary_id)
+        
+        if not summary_data:
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>摘要不存在</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+                    .error { color: #d32f2f; }
+                </style>
+            </head>
+            <body>
+                <h1 class="error">❌ 摘要不存在或已過期</h1>
+                <p>請確認鏈接是否正確，或聯繫管理員。</p>
+            </body>
+            </html>
+            ''', 404
+        
+        # 將 markdown 轉換為 HTML
+        try:
+            summary_html = markdown.markdown(
+                summary_data['summary_text'],
+                extensions=['extra', 'codehilite', 'toc']
+            )
+        except:
+            # 如果 markdown 解析失敗，直接使用原文但處理換行
+            summary_html = summary_data['summary_text'].replace('\n', '<br>')
+        
+        # 同樣處理轉錄文字
+        transcribed_html = summary_data['transcribed_text'].replace('\n', '<br>')
+        
+        # 生成美化的 HTML 頁面
+        html_template = '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>錄音摘要 - {{ created_at }}</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                    line-height: 1.6;
+                    margin: 0;
+                    padding: 0;
+                    background-color: #f8fafc;
+                    color: #2d3748;
+                }
+                .container {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }
+                .header {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 30px;
+                    border-radius: 15px;
+                    margin-bottom: 30px;
+                    box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+                }
+                .header h1 {
+                    margin: 0;
+                    font-size: 2.2em;
+                    text-align: center;
+                }
+                .stats {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                    gap: 15px;
+                    margin-top: 20px;
+                }
+                .stat-item {
+                    background: rgba(255,255,255,0.2);
+                    padding: 15px;
+                    border-radius: 10px;
+                    text-align: center;
+                }
+                .stat-value {
+                    font-size: 1.5em;
+                    font-weight: bold;
+                    display: block;
+                }
+                .section {
+                    background: white;
+                    padding: 30px;
+                    margin-bottom: 25px;
+                    border-radius: 15px;
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+                    border-left: 5px solid #667eea;
+                }
+                .section h2 {
+                    color: #667eea;
+                    margin-top: 0;
+                    font-size: 1.5em;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+                .transcribed-text {
+                    max-height: 300px;
+                    overflow-y: auto;
+                    background-color: #f7fafc;
+                    padding: 20px;
+                    border-radius: 10px;
+                    border: 1px solid #e2e8f0;
+                    font-family: 'Courier New', monospace;
+                    line-height: 1.8;
+                }
+                .summary-content {
+                    font-size: 1.1em;
+                    line-height: 1.8;
+                }
+                .summary-content h1, .summary-content h2, .summary-content h3 {
+                    color: #4a5568;
+                    margin-top: 25px;
+                    margin-bottom: 15px;
+                }
+                .summary-content h1 { font-size: 1.8em; }
+                .summary-content h2 { font-size: 1.5em; }
+                .summary-content h3 { font-size: 1.3em; }
+                .summary-content strong {
+                    color: #2d3748;
+                    font-weight: 600;
+                }
+                .summary-content ul, .summary-content ol {
+                    padding-left: 25px;
+                }
+                .summary-content li {
+                    margin-bottom: 8px;
+                }
+                .summary-content blockquote {
+                    border-left: 4px solid #667eea;
+                    padding-left: 20px;
+                    margin: 20px 0;
+                    background-color: #f7fafc;
+                    padding: 15px 20px;
+                    border-radius: 0 8px 8px 0;
+                }
+                .footer {
+                    text-align: center;
+                    padding: 30px;
+                    color: #718096;
+                    font-size: 0.9em;
+                }
+                .toggle-btn {
+                    background: #667eea;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 25px;
+                    cursor: pointer;
+                    font-size: 0.9em;
+                    margin-bottom: 15px;
+                    transition: background 0.3s;
+                }
+                .toggle-btn:hover {
+                    background: #5a6fd8;
+                }
+                @media (max-width: 600px) {
+                    .container { padding: 10px; }
+                    .header { padding: 20px; }
+                    .section { padding: 20px; }
+                    .header h1 { font-size: 1.8em; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🎙️ 錄音摘要報告</h1>
+                    <div class="stats">
+                        <div class="stat-item">
+                            <span class="stat-value">{{ estimated_minutes }}</span>
+                            <span>分鐘</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">{{ text_length }}</span>
+                            <span>字數</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">{{ processing_time }}</span>
+                            <span>處理時間</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">{{ created_date }}</span>
+                            <span>創建時間</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h2>📝 智能摘要</h2>
+                    <div class="summary-content">
+                        {{ summary_html|safe }}
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h2>📄 完整逐字稿</h2>
+                    <button class="toggle-btn" onclick="toggleTranscript()">
+                        <span id="toggle-text">顯示完整逐字稿</span>
+                    </button>
+                    <div id="transcript" class="transcribed-text" style="display: none;">
+                        {{ transcribed_html|safe }}
+                    </div>
+                </div>
+
+                <div class="footer">
+                    <p>💡 此摘要由 AI 自動生成，保存時間為24小時</p>
+                    <p>🤖 powered by Gemini AI & Whisper</p>
+                </div>
+            </div>
+
+            <script>
+                function toggleTranscript() {
+                    const transcript = document.getElementById('transcript');
+                    const toggleText = document.getElementById('toggle-text');
+                    
+                    if (transcript.style.display === 'none') {
+                        transcript.style.display = 'block';
+                        toggleText.textContent = '隱藏完整逐字稿';
+                    } else {
+                        transcript.style.display = 'none';
+                        toggleText.textContent = '顯示完整逐字稿';
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        '''
+        
+        return render_template_string(
+            html_template,
+            summary_html=summary_html,
+            transcribed_html=transcribed_html,
+            estimated_minutes=f"{summary_data['estimated_minutes']:.1f}",
+            text_length=summary_data['text_length'],
+            processing_time=f"{summary_data['processing_time']:.1f}s",
+            created_date=summary_data['created_at'].strftime('%m/%d'),
+            created_at=summary_data['created_at'].strftime('%Y-%m-%d %H:%M')
+        )
+
+    @app.route("/summaries", methods=['GET'])
+    def list_summaries():
+        """摘要列表頁面"""
+        with linebot_service.summary_storage.lock:
+            summaries = list(linebot_service.summary_storage.summaries.items())
+        
+        # 按時間倒序排列
+        summaries.sort(key=lambda x: x[1]['created_at'], reverse=True)
+        
+        html_template = '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>摘要管理 - LINE Bot 錄音助手</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    background-color: #f8fafc;
+                }
+                .container {
+                    max-width: 1000px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }
+                .header {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 30px;
+                    border-radius: 15px;
+                    margin-bottom: 30px;
+                    text-align: center;
+                }
+                .summary-card {
+                    background: white;
+                    padding: 20px;
+                    margin-bottom: 15px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    border-left: 4px solid #667eea;
+                }
+                .summary-meta {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 10px;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                }
+                .summary-stats {
+                    display: flex;
+                    gap: 15px;
+                    font-size: 0.9em;
+                    color: #666;
+                }
+                .summary-preview {
+                    color: #444;
+                    line-height: 1.5;
+                    margin: 10px 0;
+                }
+                .view-btn {
+                    background: #667eea;
+                    color: white;
+                    text-decoration: none;
+                    padding: 8px 16px;
+                    border-radius: 20px;
+                    font-size: 0.9em;
+                    transition: background 0.3s;
+                }
+                .view-btn:hover {
+                    background: #5a6fd8;
+                }
+                .empty-state {
+                    text-align: center;
+                    padding: 60px 20px;
+                    color: #666;
+                }
+                @media (max-width: 600px) {
+                    .summary-meta { flex-direction: column; align-items: flex-start; }
+                    .summary-stats { flex-wrap: wrap; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📚 摘要管理中心</h1>
+                    <p>查看和管理所有的錄音摘要</p>
+                </div>
+
+                {% if summaries %}
+                    {% for summary_id, data in summaries %}
+                    <div class="summary-card">
+                        <div class="summary-meta">
+                            <div class="summary-stats">
+                                <span>📅 {{ data.created_at.strftime('%m/%d %H:%M') }}</span>
+                                <span>⏱️ {{ "%.1f"|format(data.estimated_minutes) }}分鐘</span>
+                                <span>📝 {{ data.text_length }}字</span>
+                                <span>⚡ {{ "%.1f"|format(data.processing_time) }}秒</span>
+                            </div>
+                            <a href="/summary/{{ summary_id }}" class="view-btn">查看詳情</a>
+                        </div>
+                        <div class="summary-preview">
+                            {{ data.summary_text[:200] }}{% if data.summary_text|length > 200 %}...{% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <h2>📭 暫無摘要</h2>
+                        <p>向 LINE Bot 發送錄音後，摘要會出現在這裡</p>
+                    </div>
+                {% endif %}
+            </div>
+        </body>
+        </html>
+        '''
+        
+        return render_template_string(html_template, summaries=summaries)
 
     return app
 
