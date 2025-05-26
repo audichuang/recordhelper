@@ -1,573 +1,1097 @@
 import os
+import logging
+import tempfile
+import uuid
+import subprocess
+import time
+import asyncio
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import List, Optional, Union, Dict, Set
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+import json
+import hashlib
+
 from dotenv import load_dotenv
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, PushMessageRequest, ReplyMessageRequest, \
+    TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, AudioMessageContent, FileMessageContent
 import openai
 from google import genai
 from google.genai import types
 import requests
-import uuid
-import subprocess
 
 # 載入環境變數
 load_dotenv()
 
-# Flask App 初始化
-app = Flask(__name__)
 
-# LINE Bot 設定
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# 處理狀態管理
+class ProcessingStatus:
+    """處理狀態管理器"""
 
-if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, OPENAI_API_KEY, GOOGLE_API_KEY]):
-    print("錯誤：請設定必要的環境變數 (LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, OPENAI_API_KEY, GOOGLE_API_KEY)")
-    exit()
+    def __init__(self):
+        self.processing_messages: Dict[str, Dict] = {}
+        self.completed_messages: Set[str] = set()
+        self.lock = threading.Lock()
 
-configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-openai.api_key = OPENAI_API_KEY
+    def is_processing(self, message_id: str) -> bool:
+        """檢查訊息是否正在處理中"""
+        with self.lock:
+            return message_id in self.processing_messages
 
-# 建立 Gemini 客戶端
-genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+    def is_completed(self, message_id: str) -> bool:
+        """檢查訊息是否已完成處理"""
+        with self.lock:
+            return message_id in self.completed_messages
 
-# Whisper 模型設定
-WHISPER_MODEL = os.getenv("WHISPER_MODEL_NAME", "whisper-1")
+    def start_processing(self, message_id: str, user_id: str) -> bool:
+        """開始處理訊息，如果已在處理中則返回False"""
+        with self.lock:
+            if message_id in self.processing_messages or message_id in self.completed_messages:
+                return False
 
-# Gemini 模型設定
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-preview-05-20")
-DEFAULT_GEMINI_PROMPT = "請將以下會議記錄或談話內容整理成條列式的重點摘要，並確保語氣專業、內容精煉且易於理解：\n\n{text}"
-GEMINI_PROMPT_TEMPLATE = os.getenv("GEMINI_PROMPT_TEMPLATE", DEFAULT_GEMINI_PROMPT)
+            self.processing_messages[message_id] = {
+                'user_id': user_id,
+                'start_time': datetime.now(),
+                'status': 'started'
+            }
+            return True
 
-# 思考預算設定（0 = 關閉思考，1024 = 適中，24576 = 最大）
-THINKING_BUDGET = int(os.getenv("THINKING_BUDGET", "512"))  # 預設使用適中的思考預算
+    def update_status(self, message_id: str, status: str):
+        """更新處理狀態"""
+        with self.lock:
+            if message_id in self.processing_messages:
+                self.processing_messages[message_id]['status'] = status
+                self.processing_messages[message_id]['update_time'] = datetime.now()
+
+    def complete_processing(self, message_id: str, success: bool = True):
+        """完成處理"""
+        with self.lock:
+            if message_id in self.processing_messages:
+                del self.processing_messages[message_id]
+            self.completed_messages.add(message_id)
+
+    def cleanup_old_records(self, hours: int = 24):
+        """清理舊記錄"""
+        with self.lock:
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+
+            # 清理超時的處理中訊息
+            expired_processing = []
+            for msg_id, info in self.processing_messages.items():
+                if info['start_time'] < cutoff_time:
+                    expired_processing.append(msg_id)
+
+            for msg_id in expired_processing:
+                del self.processing_messages[msg_id]
+
+            # 保持completed_messages在合理大小內（最近1000條）
+            if len(self.completed_messages) > 1000:
+                # 簡單的FIFO清理，實際生產環境可能需要更精細的策略
+                excess = len(self.completed_messages) - 800
+                completed_list = list(self.completed_messages)
+                for i in range(excess):
+                    self.completed_messages.discard(completed_list[i])
 
 
-# 檢查 ffmpeg 是否可用
-def check_ffmpeg():
-    try:
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
-    except FileNotFoundError:
-        print("錯誤：找不到 ffmpeg。請確保已安裝 ffmpeg 並將其加入系統 PATH。")
-        return False
+@dataclass
+class AppConfig:
+    line_channel_access_token: str
+    line_channel_secret: str
+    openai_api_key: str
+    google_api_keys: List[str]
+    whisper_model: str = "whisper-1"
+    gemini_model: str = "gemini-2.5-flash-preview-05-20"
+    thinking_budget: int = 512
+    max_retries: int = 3
+    temp_dir: str = tempfile.gettempdir()
+    max_workers: int = 4  # 線程池大小
+    webhook_timeout: int = 25  # webhook 處理超時時間（秒）
+    long_audio_threshold: int = 120  # 長音訊門檻值（秒）
+    max_audio_size_mb: int = 100  # 最大音訊檔案大小（MB）
+    segment_processing_delay: float = 0.5  # 分段處理間隔（秒）
+    full_analysis: bool = True  # 是否進行完整分析（分析所有段落）
+    max_segments_for_full_analysis: int = 50  # 完整分析時的最大段落數
 
+    @classmethod
+    def from_env(cls) -> 'AppConfig':
+        """從環境變數創建配置"""
+        required_vars = {
+            'line_channel_access_token': os.getenv("LINE_CHANNEL_ACCESS_TOKEN"),
+            'line_channel_secret': os.getenv("LINE_CHANNEL_SECRET"),
+            'openai_api_key': os.getenv("OPENAI_API_KEY")
+        }
 
-# 使用 ffmpeg 轉換音訊格式
-def convert_audio(input_file, output_file):
-    try:
-        subprocess.run(
-            ["ffmpeg", "-i", input_file, "-y", output_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+        missing_vars = [k for k, v in required_vars.items() if not v]
+        if missing_vars:
+            raise ValueError(f"缺少必要的環境變數: {', '.join(missing_vars)}")
+
+        google_api_keys = []
+        for i in range(1, 11):
+            key = os.getenv(f"GOOGLE_API_KEY_{i}")
+            if key:
+                google_api_keys.append(key)
+
+        if not google_api_keys:
+            single_key = os.getenv("GOOGLE_API_KEY")
+            if single_key:
+                google_api_keys.append(single_key)
+
+        if not google_api_keys:
+            raise ValueError("請設定至少一個 GOOGLE_API_KEY")
+
+        return cls(
+            line_channel_access_token=required_vars['line_channel_access_token'],
+            line_channel_secret=required_vars['line_channel_secret'],
+            openai_api_key=required_vars['openai_api_key'],
+            google_api_keys=google_api_keys,
+            whisper_model=os.getenv("WHISPER_MODEL_NAME", "whisper-1"),
+            gemini_model=os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-preview-05-20"),
+            thinking_budget=int(os.getenv("THINKING_BUDGET", "256")),  # 降低預設值
+            max_retries=int(os.getenv("MAX_RETRIES", "2")),  # 降低重試次數
+            max_workers=int(os.getenv("MAX_WORKERS", "4")),
+            webhook_timeout=int(os.getenv("WEBHOOK_TIMEOUT", "25")),
+            full_analysis=os.getenv("FULL_ANALYSIS", "true").lower() == "true",
+            max_segments_for_full_analysis=int(os.getenv("MAX_SEGMENTS_FOR_FULL_ANALYSIS", "50"))
         )
-        return True
-    except Exception as e:
-        app.logger.error(f"轉換音訊時發生錯誤: {e}")
-        return False
 
 
-@app.route("/", methods=['GET'])
-def home():
-    """首頁，顯示可用的測試端點"""
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>LINE Bot 錄音助手</title>
-        <meta charset="UTF-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
-            .container {{ max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; }}
-            .status {{ padding: 15px; margin: 10px 0; border-radius: 5px; }}
-            .success {{ background-color: #e8f5e8; color: #2e7d32; }}
-            .error {{ background-color: #ffebee; color: #c62828; }}
-            .info {{ background-color: #e3f2fd; color: #1565c0; }}
-            a {{ display: inline-block; background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }}
-            a:hover {{ background-color: #45a049; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎙️ LINE Bot 錄音助手</h1>
-
-            <div class="info">
-                <h3>📊 系統狀態</h3>
-                <p><strong>Flask 服務：</strong> ✅ 運行中</p>
-                <p><strong>OpenAI API：</strong> {'✅ 已設定' if OPENAI_API_KEY else '❌ 未設定'}</p>
-                <p><strong>Google API：</strong> {'✅ 已設定' if GOOGLE_API_KEY else '❌ 未設定'}</p>
-                <p><strong>LINE Bot：</strong> {'✅ 已設定' if LINE_CHANNEL_ACCESS_TOKEN else '❌ 未設定'}</p>
-                <p><strong>FFmpeg：</strong> {'✅ 可用' if check_ffmpeg() else '❌ 不可用'}</p>
-            </div>
-
-            <div class="info">
-                <h3>🔧 測試工具</h3>
-                <p>在部署到 LINE Bot 之前，建議先測試各個 API 是否正常工作：</p>
-                <a href="/test-gemini">🧪 測試 Gemini API</a>
-                <br><br>
-                <p><strong>目前設定：</strong></p>
-                <ul>
-                    <li>Gemini 模型：{GEMINI_MODEL_NAME}</li>
-                    <li>思考預算：{THINKING_BUDGET} tokens</li>
-                    <li>Whisper 模型：{WHISPER_MODEL}</li>
-                </ul>
-            </div>
-
-            <div class="info">
-                <h3>📱 LINE Bot 使用方式</h3>
-                <p>1. 確保所有 API 測試通過</p>
-                <p>2. 設定 LINE Bot Webhook URL 為：<code>https://your-domain.com/callback</code></p>
-                <p>3. 在 LINE 中發送錄音訊息進行測試</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    '''
+class AudioProcessingError(Exception):
+    pass
 
 
-@app.route("/test-gemini", methods=['GET', 'POST'])
-def test_gemini():
-    """測試 Gemini API 的端點"""
-    if request.method == 'GET':
-        return '''
+class APIError(Exception):
+    pass
+
+
+class TempFileManager:
+    def __init__(self, temp_dir: str):
+        self.temp_dir = temp_dir
+        self.created_files: List[str] = []
+
+    def create_temp_file(self, suffix: str = "") -> str:
+        temp_file = os.path.join(self.temp_dir, f"{uuid.uuid4()}{suffix}")
+        self.created_files.append(temp_file)
+        return temp_file
+
+    def cleanup(self):
+        for file_path in self.created_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception as e:
+                logging.warning(f"清理檔案失敗: {file_path}, 錯誤: {e}")
+        self.created_files.clear()
+
+
+class AudioService:
+    @staticmethod
+    def check_ffmpeg() -> bool:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5  # 降低超時時間
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+
+    @staticmethod
+    def convert_audio(input_file: str, output_file: str, max_duration_hours: int = 4) -> bool:
+        try:
+            # 檢查檔案大小
+            file_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+            logging.info(f"音訊檔案大小: {file_size_mb:.1f}MB")
+            
+            # 根據檔案大小調整超時時間
+            if file_size_mb > 50:
+                timeout = 300  # 5分鐘
+                logging.info("大檔案處理，延長轉換超時時間至5分鐘")
+            elif file_size_mb > 20:
+                timeout = 120  # 2分鐘
+            else:
+                timeout = 60   # 1分鐘
+            
+            # 優化音訊轉換：降低質量以減少檔案大小和處理時間
+            cmd = [
+                "ffmpeg", "-i", input_file,
+                "-ar", "16000",  # 降低採樣率到16kHz（Whisper推薦）
+                "-ac", "1",      # 轉換為單聲道
+                "-ab", "64k",    # 降低位元率
+                "-y", output_file,
+                "-loglevel", "error"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout
+            )
+            
+            if result.returncode == 0:
+                output_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+                logging.info(f"轉換完成，輸出檔案大小: {output_size_mb:.1f}MB")
+                return True
+            else:
+                logging.error(f"FFmpeg 錯誤: {result.stderr.decode()}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error(f"音訊轉換超時（{timeout}秒）")
+            return False
+        except Exception as e:
+            logging.error(f"轉換音訊時發生錯誤: {e}")
+            return False
+
+
+class AIService:
+    def __init__(self, config: AppConfig):
+        self.config = config
+        self.openai_client = openai
+        self.openai_client.api_key = config.openai_api_key
+        self.genai_clients = [genai.Client(api_key=key) for key in config.google_api_keys]
+        self.current_genai_index = 0
+
+    def transcribe_audio(self, audio_file_path: str) -> str:
+        """使用Whisper轉換語音為文字 - 優化版本"""
+        try:
+            start_time = time.time()
+            
+            # 檢查檔案大小，如果超過25MB則警告
+            file_size = os.path.getsize(audio_file_path)
+            if file_size > 25 * 1024 * 1024:  # 25MB
+                logging.warning(f"音訊檔案較大: {file_size / (1024*1024):.1f}MB，處理時間可能較長")
+            
+            with open(audio_file_path, "rb") as audio_file:
+                transcript = self.openai_client.audio.transcriptions.create(
+                    model=self.config.whisper_model,
+                    file=audio_file,
+                    language="zh",
+                    response_format="text",  # 直接返回文字，減少處理時間
+                    prompt="以下是中文語音內容，請準確轉錄："  # 添加提示提高準確性
+                )
+
+            processing_time = time.time() - start_time
+            logging.info(f"Whisper 處理時間: {processing_time:.2f}秒")
+
+            result = transcript.strip() if isinstance(transcript, str) else transcript.text.strip()
+            logging.info(f"轉錄文字長度: {len(result)} 字符")
+            
+            return result
+        except openai.APIError as e:
+            if "insufficient_quota" in str(e):
+                raise APIError("OpenAI API 配額不足")
+            elif "rate_limit" in str(e):
+                raise APIError("API 請求過於頻繁")
+            else:
+                raise APIError(f"OpenAI API 錯誤: {e}")
+
+    def generate_summary(self, text: str) -> str:
+        """生成文字摘要 - 超長錄音智能處理版本"""
+        start_time = time.time()
+
+        try:
+            text_length = len(text)
+            logging.info(f"開始處理文字摘要，長度: {text_length} 字符")
+
+            # 估算錄音時長（粗略估算：每分鐘約150-200字）
+            estimated_minutes = text_length / 180
+            
+            if text_length <= 1500:
+                # 短錄音（<10分鐘）：完整摘要
+                return self._generate_complete_summary(text)
+            elif text_length <= 5000:
+                # 中等錄音（10-30分鐘）：重點摘要
+                return self._generate_focused_summary(text)
+            elif text_length <= 15000:
+                # 長錄音（30分鐘-1.5小時）：結構化摘要
+                return self._generate_structured_summary(text)
+            else:
+                # 超長錄音（>1.5小時）：分段式摘要
+                return self._generate_segmented_summary(text, estimated_minutes)
+
+        except Exception as e:
+            processing_time = time.time() - start_time
+            logging.error(f"Gemini 處理失敗 (耗時{processing_time:.2f}秒): {e}")
+            return "摘要功能暫時無法使用，但錄音轉文字成功。"
+
+    def _generate_complete_summary(self, text: str) -> str:
+        """完整摘要（短錄音）"""
+        prompt = f"請將以下錄音內容整理成重點摘要：\n\n{text}"
+        
+        config = types.GenerateContentConfig(
+            temperature=0.1,
+            max_output_tokens=60000,
+            top_p=0.8,
+            top_k=10
+        )
+        
+        response = self._call_gemini_with_rotation(prompt, config)
+        return self._extract_response_text(response, text)
+
+    def _generate_focused_summary(self, text: str) -> str:
+        """重點摘要（中等錄音）"""
+        try:
+            logging.info("使用重點摘要模式處理中等長度錄音")
+            prompt = f"請將以下錄音內容整理成重點摘要，突出主要觀點和關鍵資訊：\n\n{text}"
+            
+            config = types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=60000,
+                top_p=0.8,
+                top_k=10
+            )
+            
+            response = self._call_gemini_with_rotation(prompt, config)
+            result = self._extract_response_text(response, text)
+            
+            logging.info(f"重點摘要生成成功，長度: {len(result)} 字符")
+            return result
+            
+        except Exception as e:
+            logging.error(f"重點摘要生成失敗: {e}")
+            # 如果失敗，嘗試更簡單的處理方式
+            return self._generate_simple_focused_summary(text)
+
+    def _generate_structured_summary(self, text: str) -> str:
+        """結構化摘要（長錄音）"""
+        # 將文字分成3段進行分析
+        length = len(text)
+        segment1 = text[:length//3]
+        segment2 = text[length//3:2*length//3]
+        segment3 = text[2*length//3:]
+        
+        prompt = f"""請分析以下較長錄音的內容，提供結構化摘要：
+
+【前段內容】
+{segment1[:2000]}
+
+【中段內容】
+{segment2[:2000]}
+
+【後段內容】 
+{segment3[:2000]}
+
+請提供：
+1. 主要主題
+2. 重點內容
+3. 關鍵結論
+4. 重要細節"""
+
+        config = types.GenerateContentConfig(
+            temperature=0.1,
+            max_output_tokens=60000,
+            top_p=0.8,
+            top_k=10
+        )
+        
+        response = self._call_gemini_with_rotation(prompt, config)
+        result = self._extract_response_text(response, text, structured=True)
+        
+        return f"{result}\n\n📊 錄音時長：約 {len(text)/180:.0f} 分鐘"
+
+    def _generate_segmented_summary(self, text: str, estimated_minutes: float) -> str:
+        """分段式摘要（超長錄音）"""
+        try:
+            # 將文字分成多個段落，每段約3000字
+            segments = []
+            chunk_size = 3000
+            for i in range(0, len(text), chunk_size):
+                segment = text[i:i+chunk_size]
+                segments.append(segment)
+            
+            logging.info(f"超長錄音分為 {len(segments)} 段處理")
+            
+            # 根據配置決定是否進行完整分析
+            if self.config.full_analysis:
+                # 完整分析所有段落
+                if len(segments) <= self.config.max_segments_for_full_analysis:
+                    key_segments = segments
+                    analysis_note = f"（完整分析 {len(segments)} 段）"
+                    logging.info(f"進行完整分析，處理 {len(segments)} 段")
+                else:
+                    # 如果段落數超過限制，進行警告但仍盡可能分析更多
+                    key_segments = segments[:self.config.max_segments_for_full_analysis]
+                    analysis_note = f"（因段落過多，已分析前 {len(key_segments)} 段，共 {len(segments)} 段）"
+                    logging.warning(f"段落數 {len(segments)} 超過限制 {self.config.max_segments_for_full_analysis}，只分析前 {len(key_segments)} 段")
+            else:
+                # 智能選取關鍵段落（原有邏輯）
+                if len(segments) > 10:
+                    # 取開頭3段、中間2段、結尾3段
+                    key_segments = segments[:3] + segments[len(segments)//2-1:len(segments)//2+1] + segments[-3:]
+                    analysis_note = f"（智能選取：已從 {len(segments)} 段中選取 {len(key_segments)} 個關鍵段落分析）"
+                else:
+                    key_segments = segments[:6]  # 最多處理前6段
+                    analysis_note = f"（共 {len(segments)} 段，已分析前 {len(key_segments)} 段）"
+            
+            # 生成分段摘要
+            segment_summaries = []
+            total_segments = len(key_segments)
+            
+            # 如果是完整分析且段落很多，發送進度通知
+            if self.config.full_analysis and total_segments > 20:
+                logging.info(f"開始完整分析 {total_segments} 段，預計需要 {total_segments * 0.5:.0f} 秒")
+            
+            for i, segment in enumerate(key_segments):
+                try:
+                    # 動態調整段落標記（如果是智能選取，使用原始段落號）
+                    if self.config.full_analysis or len(segments) <= 10:
+                        segment_label = f"第{i+1}段"
+                    else:
+                        # 智能選取模式，計算原始段落號
+                        if i < 3:
+                            segment_number = i + 1
+                        elif i < 5:
+                            segment_number = len(segments)//2 + (i - 3)
+                        else:
+                            segment_number = len(segments) - (7 - i)
+                        segment_label = f"第{segment_number}段"
+                    
+                    prompt = f"請簡潔總結以下錄音片段的重點（{segment_label}）：\n\n{segment[:2000]}"
+                    
+                    config = types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=10000,
+                        top_p=0.8,
+                        top_k=5
+                    )
+                    
+                    response = self._call_gemini_with_rotation(prompt, config)
+                    if response and response.candidates:
+                        summary = response.text.strip()
+                        segment_summaries.append(f"【{segment_label}】{summary}")
+                    
+                    # 記錄處理進度
+                    if (i + 1) % 10 == 0:
+                        logging.info(f"已完成 {i + 1}/{total_segments} 段分析")
+                    
+                    time.sleep(self.config.segment_processing_delay)  # 使用配置的延遲時間
+                    
+                except Exception as e:
+                    logging.warning(f"處理{segment_label}時出錯: {e}")
+                    segment_summaries.append(f"【{segment_label}】處理失敗")
+            
+            # 生成總體摘要
+            combined_summary = "\n\n".join(segment_summaries)
+            
+            final_prompt = f"""基於以下分段摘要，請提供整體重點總結：
+
+{combined_summary}
+
+請提供：
+1. 主要議題和主題
+2. 核心觀點和結論
+3. 重要決定或行動項目"""
+
+            config = types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=60000,
+                top_p=0.8,
+                top_k=10
+            )
+            
+            final_response = self._call_gemini_with_rotation(final_prompt, config)
+            final_summary = self._extract_response_text(final_response, text, structured=True)
+            
+            # 組合最終結果
+            result = f"🎯 【整體摘要】\n{final_summary}\n\n📝 【分段重點】\n{combined_summary}\n\n"
+            result += f"⏱️ 錄音時長：約 {estimated_minutes:.0f} 分鐘 ({len(text)} 字)\n"
+            result += f"📊 分析說明：{analysis_note}"
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"分段摘要處理失敗: {e}")
+            return self._generate_fallback_summary(text, estimated_minutes)
+
+    def _generate_fallback_summary(self, text: str, estimated_minutes: float) -> str:
+        """備用摘要（當分段處理失敗時）"""
+        # 只取開頭和結尾進行摘要
+        start_text = text[:2000]
+        end_text = text[-2000:] if len(text) > 4000 else ""
+        
+        summary_text = f"開頭：{start_text}"
+        if end_text:
+            summary_text += f"\n\n結尾：{end_text}"
+        
+        prompt = f"這是一個約 {estimated_minutes:.0f} 分鐘的長錄音的開頭和結尾部分，請提供基本摘要：\n\n{summary_text}"
+        
+        try:
+            config = types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=30000,
+                top_p=0.8,
+                top_k=5
+            )
+            
+            response = self._call_gemini_with_rotation(prompt, config)
+            result = self._extract_response_text(response, text)
+            
+            return f"{result}\n\n⚠️ 因錄音過長，此為簡化摘要\n⏱️ 錄音時長：約 {estimated_minutes:.0f} 分鐘"
+            
+        except Exception as e:
+            logging.error(f"備用摘要也失敗: {e}")
+            return f"✅ 錄音轉文字成功\n⏱️ 錄音時長：約 {estimated_minutes:.0f} 分鐘 ({len(text)} 字)\n📝 因內容過長，摘要功能暫時無法使用，請查看完整逐字稿"
+
+    def _extract_response_text(self, response, original_text: str, structured: bool = False) -> str:
+        """提取回應文字並處理各種狀況"""
+        if not response or not response.candidates:
+            logging.warning("Gemini 回應無內容或無候選項")
+            raise APIError("無法生成摘要回應")
+        
+        candidate = response.candidates[0]
+        finish_reason = str(candidate.finish_reason)
+        
+        logging.info(f"Gemini 回應狀態: {finish_reason}")
+        
+        if "STOP" in finish_reason:
+            result = response.text.strip()
+            logging.info(f"摘要生成成功，長度: {len(result)} 字符")
+            return result
+        elif "SAFETY" in finish_reason:
+            return "⚠️ 內容可能包含敏感資訊，無法產生摘要"
+        elif "MAX_TOKEN" in finish_reason or "LENGTH" in finish_reason:
+            logging.warning(f"Token 限制觸發: {finish_reason}")
+            # 如果是結構化處理，嘗試返回部分結果
+            if structured and response.text:
+                return f"{response.text.strip()}\n\n⚠️ 摘要因長度限制可能不完整"
+            else:
+                # 對於中等長度錄音，嘗試簡化處理
+                raise APIError(f"內容過長需要簡化處理: {finish_reason}")
+        else:
+            logging.warning(f"未知的完成狀態: {finish_reason}")
+            if response.text and len(response.text.strip()) > 0:
+                return f"{response.text.strip()}\n\n⚠️ 摘要可能不完整（{finish_reason}）"
+            else:
+                raise APIError(f"摘要生成異常: {finish_reason}")
+
+    def _generate_simple_focused_summary(self, text: str) -> str:
+        """簡化版重點摘要（中等錄音備用方案）"""
+        try:
+            logging.info("使用簡化版重點摘要")
+            # 分段處理，每段2000字符
+            chunks = [text[i:i+2000] for i in range(0, len(text), 2000)]
+            
+            summaries = []
+            for i, chunk in enumerate(chunks[:3]):  # 最多處理前3段
+                try:
+                    prompt = f"請簡潔總結以下內容的重點：\n\n{chunk}"
+                    
+                    config = types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=20000,
+                        top_p=0.8,
+                        top_k=5
+                    )
+                    
+                    response = self._call_gemini_with_rotation(prompt, config)
+                    if response and response.candidates and "STOP" in str(response.candidates[0].finish_reason):
+                        summaries.append(response.text.strip())
+                    
+                    time.sleep(0.3)  # 短暫延遲
+                    
+                except Exception as e:
+                    logging.warning(f"處理第{i+1}段簡化摘要失敗: {e}")
+                    continue
+            
+            if summaries:
+                result = "\n\n".join(summaries)
+                if len(chunks) > 3:
+                    result += f"\n\n💡 註：已摘要前3段內容，總共{len(chunks)}段"
+                return result
+            else:
+                return self._generate_short_summary(text[:1000])
+                
+        except Exception as e:
+            logging.error(f"簡化版重點摘要失敗: {e}")
+            return self._generate_short_summary(text[:1000])
+
+    def _generate_short_summary(self, text: str) -> str:
+        """生成簡短摘要（備用方案）"""
+        try:
+            logging.info("使用簡短摘要模式")
+            prompt = f"請用最簡潔的方式總結以下內容的主要重點（限100字內）：\n\n{text[:1000]}"
+            
+            config = types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=20000,
+                top_p=0.8,
+                top_k=5
+            )
+
+            response = self._call_gemini_with_rotation(prompt, config)
+            
+            if response and response.candidates and "STOP" in str(response.candidates[0].finish_reason):
+                return f"{response.text.strip()}\n\n⚠️ 因處理限制，此為簡化摘要"
+            else:
+                return "✅ 錄音轉文字成功\n📝 內容較長，建議查看完整逐字稿"
+                
+        except Exception as e:
+            logging.error(f"簡短摘要也失敗: {e}")
+            return "✅ 錄音轉文字成功\n📝 摘要功能暫時無法使用，請查看完整逐字稿"
+
+    def _call_gemini_with_rotation(self, prompt: str, config: types.GenerateContentConfig):
+        """快速輪詢API金鑰，只嘗試一次"""
+        client = self.genai_clients[self.current_genai_index]
+        try:
+            response = client.models.generate_content(
+                model=self.config.gemini_model,
+                contents=prompt,
+                config=config
+            )
+            return response
+        except Exception as e:
+            logging.warning(f"Gemini API 金鑰 {self.current_genai_index + 1} 失敗: {e}")
+            # 切換到下一個金鑰供下次使用
+            self.current_genai_index = (self.current_genai_index + 1) % len(self.genai_clients)
+            raise APIError(f"Gemini API 調用失敗: {e}")
+
+
+class AsyncLineBotService:
+    """異步處理的LINE Bot服務"""
+
+    def __init__(self, config: AppConfig):
+        self.config = config
+        self.configuration = Configuration(access_token=config.line_channel_access_token)
+        self.handler = WebhookHandler(config.line_channel_secret)
+        self.ai_service = AIService(config)
+        self.audio_service = AudioService()
+        self.processing_status = ProcessingStatus()
+
+        # 線程池用於異步處理
+        self.executor = ThreadPoolExecutor(max_workers=config.max_workers)
+
+        # 定期清理任務
+        self._start_cleanup_task()
+
+        self._register_handlers()
+
+    def _start_cleanup_task(self):
+        """啟動定期清理任務"""
+
+        def cleanup_worker():
+            while True:
+                try:
+                    time.sleep(3600)  # 每小時執行一次
+                    self.processing_status.cleanup_old_records()
+                    logging.info("完成定期清理任務")
+                except Exception as e:
+                    logging.error(f"清理任務錯誤: {e}")
+
+        cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
+        cleanup_thread.start()
+
+    def _register_handlers(self):
+        """註冊LINE Bot事件處理器"""
+
+        @self.handler.add(MessageEvent, message=AudioMessageContent)
+        def handle_audio_message(event):
+            self._handle_audio_message_async(event)
+
+        @self.handler.add(MessageEvent, message=FileMessageContent)
+        def handle_file_message(event):
+            self._handle_audio_message_async(event)
+
+        @self.handler.add(MessageEvent, message=TextMessageContent)
+        def handle_text_message(event):
+            self._handle_text_message(event)
+
+    def _handle_audio_message_async(self, event):
+        """異步處理音訊訊息"""
+        message_id = event.message.id
+        user_id = event.source.user_id
+        reply_token = event.reply_token
+
+        # 檢查是否已處理或正在處理
+        if self.processing_status.is_completed(message_id):
+            logging.info(f"訊息 {message_id} 已處理完成，跳過")
+            return
+
+        if not self.processing_status.start_processing(message_id, user_id):
+            logging.info(f"訊息 {message_id} 正在處理中或已完成，跳過")
+            return
+
+        # 立即回覆確認訊息，避免LINE重發
+        line_api = MessagingApi(ApiClient(self.configuration))
+        try:
+            self._safe_reply(line_api, reply_token, [
+                TextMessage(text="🎙️ 收到您的錄音，正在處理中，請稍候...")
+            ])
+            logging.info(f"已發送確認訊息給用戶 {user_id}")
+        except Exception as e:
+            logging.error(f"發送確認訊息失敗: {e}")
+
+        # 提交到線程池異步處理
+        future = self.executor.submit(
+            self._process_audio_background,
+            message_id, user_id, line_api
+        )
+
+        # 設定多階段超時處理
+        def timeout_handler():
+            # 第一次通知：25秒後
+            time.sleep(self.config.webhook_timeout)
+            if not self.processing_status.is_completed(message_id):
+                logging.warning(f"訊息 {message_id} 處理超時 - 第一次通知")
+                self.processing_status.update_status(message_id, "timeout_notified_1")
+                try:
+                    self._send_push_message(line_api, user_id,
+                                            "⏰ 處理時間較長，請稍候。我們會盡快為您完成錄音分析。")
+                except Exception as e:
+                    logging.error(f"發送第一次超時訊息失敗: {e}")
+            
+            # 第二次通知：2分鐘後
+            time.sleep(95)  # 總共120秒
+            if not self.processing_status.is_completed(message_id):
+                logging.warning(f"訊息 {message_id} 處理超時 - 第二次通知")
+                self.processing_status.update_status(message_id, "timeout_notified_2")
+                try:
+                    self._send_push_message(line_api, user_id,
+                                            "🎯 正在處理較長的錄音，預計還需要幾分鐘時間。\n\n💡 長錄音處理流程：\n1️⃣ 音訊轉換\n2️⃣ 語音識別\n3️⃣ 分段摘要\n\n請耐心等候...")
+                except Exception as e:
+                    logging.error(f"發送第二次超時訊息失敗: {e}")
+            
+            # 第三次通知：5分鐘後
+            time.sleep(180)  # 總共300秒
+            if not self.processing_status.is_completed(message_id):
+                logging.warning(f"訊息 {message_id} 處理超時 - 第三次通知")
+                self.processing_status.update_status(message_id, "timeout_notified_3")
+                try:
+                    self._send_push_message(line_api, user_id,
+                                            "⏳ 您的錄音正在最後處理階段，即將完成！\n\n📊 對於2-3小時的長錄音，我們的處理流程包括：\n• 智能分段分析\n• 結構化摘要生成\n• 重點內容提取\n\n感謝您的耐心等候 🙏")
+                except Exception as e:
+                    logging.error(f"發送第三次超時訊息失敗: {e}")
+
+        timeout_thread = threading.Thread(target=timeout_handler, daemon=True)
+        timeout_thread.start()
+
+    def _process_audio_background(self, message_id: str, user_id: str, line_api: MessagingApi):
+        """背景處理音訊"""
+        file_manager = TempFileManager(self.config.temp_dir)
+        start_time = time.time()
+
+        try:
+            logging.info(f"開始背景處理音訊 {message_id}")
+            self.processing_status.update_status(message_id, "downloading")
+
+            # 1. 下載音訊
+            audio_content = self._download_audio(message_id)
+
+            # 2. 轉換格式
+            self.processing_status.update_status(message_id, "converting")
+            original_file = file_manager.create_temp_file(".m4a")
+            mp3_file = file_manager.create_temp_file(".mp3")
+
+            with open(original_file, 'wb') as f:
+                f.write(audio_content)
+
+            if not self.audio_service.convert_audio(original_file, mp3_file):
+                raise AudioProcessingError("音訊轉換失敗")
+
+            # 3. 語音轉文字
+            self.processing_status.update_status(message_id, "transcribing")
+            transcribed_text = self.ai_service.transcribe_audio(mp3_file)
+
+            if not transcribed_text:
+                raise AudioProcessingError("無法辨識語音內容")
+
+            # 4. 生成摘要（非阻塞，失敗也不影響主要功能）
+            self.processing_status.update_status(message_id, "summarizing")
+            try:
+                summary_text = self.ai_service.generate_summary(transcribed_text)
+            except Exception as e:
+                logging.warning(f"摘要生成失敗: {e}")
+                summary_text = "摘要功能暫時無法使用"
+
+            # 5. 發送結果
+            self.processing_status.update_status(message_id, "sending")
+            processing_time = time.time() - start_time
+
+            self._send_final_result(line_api, user_id, transcribed_text, summary_text, processing_time)
+
+            self.processing_status.complete_processing(message_id, True)
+            logging.info(f"音訊處理完成 {message_id}，總耗時 {processing_time:.2f}秒")
+
+        except Exception as e:
+            processing_time = time.time() - start_time
+            logging.error(f"背景處理音訊失敗 {message_id} (耗時{processing_time:.2f}秒): {e}")
+
+            try:
+                error_msg = "處理您的錄音時發生錯誤，請稍後再試"
+                if isinstance(e, AudioProcessingError):
+                    error_msg = str(e)
+                elif isinstance(e, APIError):
+                    error_msg = str(e)
+
+                self._send_push_message(line_api, user_id, f"抱歉，{error_msg}")
+            except Exception as send_error:
+                logging.error(f"發送錯誤訊息失敗: {send_error}")
+
+            self.processing_status.complete_processing(message_id, False)
+        finally:
+            file_manager.cleanup()
+
+    def _download_audio(self, message_id: str) -> bytes:
+        """下載音訊檔案"""
+        headers = {'Authorization': f'Bearer {self.config.line_channel_access_token}'}
+        url = f'https://api-data.line.me/v2/bot/message/{message_id}/content'
+
+        response = requests.get(url, headers=headers, timeout=20)  # 降低超時時間
+        if response.status_code != 200:
+            raise AudioProcessingError(f"下載檔案失敗，狀態碼: {response.status_code}")
+
+        return response.content
+
+    def _send_final_result(self, line_api: MessagingApi, user_id: str,
+                           transcribed_text: str, summary_text: str, processing_time: float):
+        """發送最終結果"""
+        # 統計資訊
+        text_length = len(transcribed_text)
+        estimated_minutes = text_length / 180
+        time_info = f"\n\n⏱️ 處理時間: {processing_time:.1f}秒"
+        length_info = f"\n📊 錄音長度: 約{estimated_minutes:.1f}分鐘 ({text_length}字)"
+        
+        # 檢查摘要是否成功
+        is_summary_failed = ("摘要功能暫時無法使用" in summary_text or 
+                           "建議查看完整逐字稿" in summary_text)
+        
+        if is_summary_failed:
+            # 摘要失敗時，確保提供完整轉錄文字
+            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 摘要狀態：\n{summary_text}{length_info}{time_info}"
+        else:
+            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 重點摘要：\n{summary_text}{length_info}{time_info}"
+
+        # 分割長訊息（更智能的分割）
+        if len(reply_text) > 4500:
+            # 第一條：轉錄文字
+            messages = [f"🎙️ 錄音轉文字：\n{transcribed_text}"]
+            
+            # 第二條：摘要和統計
+            if is_summary_failed:
+                messages.append(f"📝 摘要狀態：\n{summary_text}{length_info}{time_info}")
+            else:
+                messages.append(f"📝 重點摘要：\n{summary_text}{length_info}{time_info}")
+        else:
+            messages = [reply_text]
+
+        # 發送訊息
+        for i, msg in enumerate(messages):
+            try:
+                self._send_push_message(line_api, user_id, msg)
+                if i < len(messages) - 1:  # 不是最後一條訊息
+                    time.sleep(0.2)  # 訊息間間隔
+            except Exception as e:
+                logging.error(f"發送第{i+1}條訊息失敗: {e}")
+                # 即使某條訊息失敗，也繼續發送其他訊息
+
+    def _send_push_message(self, line_api: MessagingApi, user_id: str, text: str):
+        """發送推送訊息"""
+        try:
+            line_api.push_message(PushMessageRequest(
+                to=user_id,
+                messages=[TextMessage(text=text)]
+            ))
+        except Exception as e:
+            logging.error(f"推送訊息失敗: {e}")
+            raise
+
+    def _handle_text_message(self, event):
+        """處理文字訊息"""
+        line_api = MessagingApi(ApiClient(self.configuration))
+        user_text = event.message.text
+
+        if user_text.startswith("測試"):
+            try:
+                summary = self.ai_service.generate_summary("這是一個測試文字")
+                self._safe_reply(line_api, event.reply_token, [
+                    TextMessage(text=f"✅ 測試成功！摘要：{summary}")
+                ])
+            except Exception as e:
+                self._safe_reply(line_api, event.reply_token, [
+                    TextMessage(text=f"❌ 測試失敗：{e}")
+                ])
+        elif user_text.startswith("狀態"):
+            # 系統狀態查詢
+            status_info = self._get_system_status()
+            self._safe_reply(line_api, event.reply_token, [
+                TextMessage(text=status_info)
+            ])
+        else:
+            help_text = ("🎙️ 請傳送錄音，我會轉換成逐字稿並整理重點。\n\n"
+                         "💡 指令：\n• 「測試」- 測試AI功能\n• 「狀態」- 查看系統狀態")
+            self._safe_reply(line_api, event.reply_token, [TextMessage(text=help_text)])
+
+    def _get_system_status(self) -> str:
+        """獲取系統狀態"""
+        with self.processing_status.lock:
+            processing_count = len(self.processing_status.processing_messages)
+            completed_count = len(self.processing_status.completed_messages)
+
+        return (f"📊 系統狀態\n"
+                f"• 處理中訊息: {processing_count}\n"
+                f"• 已完成訊息: {completed_count}\n"
+                f"• 線程池大小: {self.config.max_workers}\n"
+                f"• FFmpeg: {'✅' if self.audio_service.check_ffmpeg() else '❌'}\n"
+                f"• API金鑰數量: {len(self.config.google_api_keys)}\n"
+                f"• 完整分析: {'✅ 啟用' if self.config.full_analysis else '❌ 智能選取'}\n"
+                f"• 最大分析段數: {self.config.max_segments_for_full_analysis}")
+
+    def _safe_reply(self, line_api: MessagingApi, reply_token: str, messages: List[TextMessage]):
+        """安全回覆"""
+        try:
+            line_api.reply_message(ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=messages
+            ))
+        except Exception as e:
+            logging.error(f"回覆訊息失敗: {e}")
+            # 如果reply token失效，記錄詳細錯誤但不拋出異常
+            if "Invalid reply token" in str(e):
+                logging.warning(f"Reply token 已失效或過期: {reply_token}")
+            else:
+                logging.error(f"其他回覆錯誤: {e}")
+
+
+def create_app() -> Flask:
+    """創建Flask應用"""
+    try:
+        config = AppConfig.from_env()
+    except ValueError as e:
+        logging.error(f"配置錯誤: {e}")
+        exit(1)
+
+    app = Flask(__name__)
+
+    # 設定日誌
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    # 創建異步LINE Bot服務
+    linebot_service = AsyncLineBotService(config)
+
+    @app.route("/", methods=['GET'])
+    def home():
+        """首頁"""
+        return f'''
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Gemini API 測試</title>
+            <title>異步LINE Bot 錄音助手</title>
             <meta charset="UTF-8">
             <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .container { max-width: 800px; margin: 0 auto; }
-                textarea { width: 100%; height: 150px; margin: 10px 0; }
-                button { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; }
-                .result { margin-top: 20px; padding: 20px; background-color: #f9f9f9; border-radius: 5px; }
-                .error { background-color: #ffebee; color: #c62828; }
-                .success { background-color: #e8f5e8; color: #2e7d32; }
-                .config { background-color: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+                body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
+                .container {{ max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; }}
+                .status {{ padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #e3f2fd; color: #1565c0; }}
+                .improvement {{ padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #e8f5e8; color: #2e7d32; }}
             </style>
         </head>
         <body>
             <div class="container">
-                <h1>🧪 Gemini API 測試工具</h1>
+                <h1>🚀 異步LINE Bot 錄音助手</h1>
 
-                <div class="config">
-                    <h3>目前設定</h3>
-                    <p><strong>模型：</strong> ''' + GEMINI_MODEL_NAME + '''</p>
-                    <p><strong>思考預算：</strong> ''' + str(THINKING_BUDGET) + ''' tokens</p>
-                    <p><strong>API Key：</strong> ''' + ('✅ 已設定' if GOOGLE_API_KEY else '❌ 未設定') + '''</p>
+                <div class="improvement">
+                    <h3>🚀 超高性能優化</h3>
+                    <ul>
+                        <li>💪 極限輸出：60,000 tokens 最大摘要長度</li>
+                        <li>🔄 異步處理：避免重複訊息問題</li>
+                        <li>⚡ 快速回應：立即確認收到錄音</li>
+                        <li>📊 狀態管理：智能處理重複請求</li>
+                        <li>⏱️ 超時保護：25秒內必定有回應</li>
+                        <li>🧵 多線程：支援同時處理多個請求</li>
+                        <li>📝 詳盡摘要：支援超長錄音完整分析</li>
+                    </ul>
                 </div>
 
-                <form method="POST">
-                    <h3>測試文字：</h3>
-                    <textarea name="test_text" placeholder="輸入要測試的文字...">這是一個測試。請用一句話總結這段文字。</textarea>
-
-                    <h3>思考預算 (0-1024)：</h3>
-                    <input type="number" name="thinking_budget" value="0" min="0" max="1024" style="width: 100px;">
-                    <small>0 = 關閉思考，1024 = 最大思考</small>
-
-                    <br><br>
-                    <button type="submit">🚀 測試 Gemini API</button>
-                </form>
+                <div class="status">
+                    <h3>📊 系統設定</h3>
+                    <p><strong>服務時間：</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+                    <p><strong>最大工作線程：</strong> {config.max_workers}</p>
+                    <p><strong>Webhook超時：</strong> {config.webhook_timeout}秒</p>
+                    <p><strong>思考預算：</strong> {config.thinking_budget} tokens</p>
+                    <p><strong>最大重試：</strong> {config.max_retries} 次</p>
+                    <p><strong>API金鑰數量：</strong> {len(config.google_api_keys)}</p>
+                    <p><strong>完整分析：</strong> {'✅ 啟用' if config.full_analysis else '❌ 智能選取'}</p>
+                    <p><strong>最大分析段數：</strong> {config.max_segments_for_full_analysis}</p>
+                </div>
             </div>
         </body>
         </html>
         '''
 
-    elif request.method == 'POST':
+    @app.route("/callback", methods=['POST'])
+    def callback():
+        """LINE Bot webhook - 優化版本"""
+        signature = request.headers['X-Line-Signature']
+        body = request.get_data(as_text=True)
+
         try:
-            test_text = request.form.get('test_text', '測試文字')
-            thinking_budget = int(request.form.get('thinking_budget', 0))
-
-            app.logger.info(f"測試 Gemini API - 文字: {test_text[:50]}...")
-            app.logger.info(f"測試設定 - thinking_budget: {thinking_budget}")
-
-            # 建立測試設定
-            config = types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=200,
-                top_p=0.8,
-                top_k=10,
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=thinking_budget
-                )
-            )
-
-            # 發送請求
-            response = genai_client.models.generate_content(
-                model=GEMINI_MODEL_NAME,
-                contents=f"請簡要回應：{test_text}",
-                config=config
-            )
-
-            # 檢查回應
-            if not response or not response.candidates:
-                return f'''
-                <div class="container">
-                    <div class="result error">
-                        <h3>❌ 測試失敗</h3>
-                        <p>API 返回空回應</p>
-                        <a href="/test-gemini">← 返回測試</a>
-                    </div>
-                </div>
-                '''
-
-            candidate = response.candidates[0]
-            finish_reason = str(candidate.finish_reason)
-
-            result_html = f'''
-            <div class="container">
-                <div class="result success">
-                    <h3>✅ 測試成功！</h3>
-                    <p><strong>回應：</strong></p>
-                    <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                        {response.text if response.text else '(空回應)'}
-                    </div>
-                    <p><strong>完成原因：</strong> {finish_reason}</p>
-                    <p><strong>使用的設定：</strong></p>
-                    <ul>
-                        <li>模型：{GEMINI_MODEL_NAME}</li>
-                        <li>思考預算：{thinking_budget} tokens</li>
-                        <li>最大輸出：200 tokens</li>
-                    </ul>
-                </div>
-                <a href="/test-gemini">← 繼續測試</a>
-            </div>
-            '''
-
-            return result_html
-
+            linebot_service.handler.handle(body, signature)
+        except InvalidSignatureError:
+            logging.error("Invalid signature")
+            abort(400)
         except Exception as e:
-            app.logger.error(f"Gemini 測試錯誤: {e}")
-            return f'''
-            <div class="container">
-                <div class="result error">
-                    <h3>❌ 測試失敗</h3>
-                    <p><strong>錯誤訊息：</strong> {str(e)}</p>
-                    <p><strong>建議檢查：</strong></p>
-                    <ul>
-                        <li>Google API Key 是否正確</li>
-                        <li>API 配額是否足夠</li>
-                        <li>網路連線是否正常</li>
-                        <li>模型名稱是否正確</li>
-                    </ul>
-                    <a href="/test-gemini">← 返回測試</a>
-                </div>
-            </div>
-            '''
+            logging.error(f"Webhook處理錯誤: {e}")
+            # 即使出錯也要返回200，避免LINE重發
 
+        return 'OK'
 
-@app.route("/callback", methods=['POST'])
-def callback():
-    # 取得 X-Line-Signature 標頭值
-    signature = request.headers['X-Line-Signature']
+    @app.route("/health", methods=['GET'])
+    def health_check():
+        """健康檢查"""
+        with linebot_service.processing_status.lock:
+            processing_count = len(linebot_service.processing_status.processing_messages)
+            completed_count = len(linebot_service.processing_status.completed_messages)
 
-    # 以文字形式取得請求主體
-    body = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "processing_messages": processing_count,
+            "completed_messages": completed_count,
+            "max_workers": config.max_workers,
+            "ffmpeg_available": AudioService.check_ffmpeg()
+        })
 
-    # 處理 webhook 主體
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        app.logger.info("Invalid signature. Please check your channel access token/channel secret.")
-        abort(400)
-    except Exception as e:
-        app.logger.error(f"Error handling webhook: {e}")
-        abort(400)
-
-    return 'OK'
-
-
-@handler.add(MessageEvent, message=AudioMessageContent)
-def handle_audio_message(event):
-    line_api = MessagingApi(ApiClient(configuration))
-    message_id = event.message.id
-    user_id = event.source.user_id
-    app.logger.info(f"接收到來自使用者 {user_id} 的錄音訊息 ID: {message_id}")
-
-    # 檢查是否為重複傳送
-    webhook_event_id = getattr(event, 'webhook_event_id', None)
-    is_redelivery = hasattr(event, 'delivery_context') and getattr(event.delivery_context, 'is_redelivery', False)
-
-    if is_redelivery:
-        app.logger.warning(f"跳過重複傳送的訊息: {message_id} (webhook_event_id: {webhook_event_id})")
-        return
-
-    # 初始化檔案路徑變數
-    temp_file_path = None
-    mp3_file_path = None
-
-    try:
-        # 1. 下載錄音檔案
-        app.logger.info(f"開始下載錄音檔案: {message_id}")
-
-        headers = {
-            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}'
-        }
-
-        response = requests.get(
-            f'https://api-data.line.me/v2/bot/message/{message_id}/content',
-            headers=headers,
-            timeout=30
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"下載檔案失敗，狀態碼: {response.status_code}")
-
-        temp_file_path = f"/tmp/{uuid.uuid4()}.m4a"
-        with open(temp_file_path, 'wb') as fd:
-            fd.write(response.content)
-
-        # 轉換 m4a 到 mp3
-        mp3_file_path = f"/tmp/{uuid.uuid4()}.mp3"
-        if not convert_audio(temp_file_path, mp3_file_path):
-            raise Exception("音訊轉換失敗")
-        app.logger.info(f"錄音檔案已轉換為 MP3: {mp3_file_path}")
-
-        # 2. 使用 OpenAI Whisper 將錄音轉為逐字稿
-        app.logger.info(f"開始使用 Whisper ({WHISPER_MODEL}) 進行語音轉文字...")
-        with open(mp3_file_path, "rb") as audio_file:
-            transcript = openai.audio.transcriptions.create(
-                model=WHISPER_MODEL,
-                file=audio_file,
-                language="zh"  # 指定中文提高準確度
-            )
-        transcribed_text = transcript.text
-        app.logger.info(f"逐字稿 ({WHISPER_MODEL}): {transcribed_text}")
-
-        if not transcribed_text.strip():
-            raise Exception("無法辨識語音內容，請嘗試重新錄音")
-
-        # 3. 使用 Gemini 2.5 Flash 將逐字稿轉為重點摘要
-        summary_text = generate_summary_with_retry(transcribed_text)
-
-        # 4. 將結果傳回給使用者
-        reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 重點摘要：\n{summary_text}"
-
-        # 檢查內容長度，避免超過 LINE 訊息限制
-        if len(reply_text) > 5000:
-            safe_reply_message(line_api, event.reply_token, [
-                TextMessage(text=f"🎙️ 錄音轉文字：\n{transcribed_text}"),
-                TextMessage(text=f"📝 重點摘要：\n{summary_text}")
-            ])
-        else:
-            safe_reply_message(line_api, event.reply_token, [TextMessage(text=reply_text)])
-
-    except openai.APIError as e:
-        app.logger.error(f"OpenAI API 錯誤: {e}")
-        error_message = "語音轉文字服務暫時出現問題"
-
-        if "insufficient_quota" in str(e):
-            error_message = "⚠️ OpenAI API 配額不足，請檢查帳戶餘額"
-        elif "rate_limit" in str(e):
-            error_message = "⚠️ API 請求過於頻繁，請稍後再試"
-
-        safe_reply_message(line_api, event.reply_token, [
-            TextMessage(text=f"抱歉，{error_message}")
-        ])
-
-    except Exception as e:
-        app.logger.error(f"處理錄音訊息時發生未預期錯誤: {e}", exc_info=True)
-
-        # 如果有逐字稿但摘要失敗，至少回傳逐字稿
-        error_message = "處理您的錄音時發生錯誤"
-        if 'transcribed_text' in locals() and transcribed_text.strip():
-            error_message = f"摘要功能暫時無法使用，但這是您的錄音內容：\n\n🎙️ {transcribed_text}"
-
-        safe_reply_message(line_api, event.reply_token, [
-            TextMessage(text=error_message)
-        ])
-
-    finally:
-        # 清理暫存檔案
-        for file_path in [temp_file_path, mp3_file_path]:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except Exception as e:
-                    app.logger.warning(f"清理檔案失敗: {file_path}, 錯誤: {e}")
-
-
-def generate_summary_with_retry(transcribed_text, max_retries=3):
-    """使用重試機制生成摘要（新版 SDK）"""
-    import time
-
-    for attempt in range(max_retries):
+    @app.route("/test-gemini", methods=['GET'])
+    def test_gemini():
+        """測試Gemini API功能"""
         try:
-            app.logger.info(f"開始使用 Gemini ({GEMINI_MODEL_NAME}) 產生重點摘要... (嘗試 {attempt + 1}/{max_retries})")
-
-            prompt = GEMINI_PROMPT_TEMPLATE.format(text=transcribed_text)
-
-            # 根據重試次數調整輸入長度，避免 MAX_TOKENS 錯誤
-            max_input_length = 15000 - (attempt * 5000)  # 逐步縮短輸入
-            if len(prompt) > max_input_length:
-                shortened_text = transcribed_text[:max_input_length // 2] + "..."
-                prompt = GEMINI_PROMPT_TEMPLATE.format(text=shortened_text)
-                app.logger.info(f"嘗試 {attempt + 1}: 縮短輸入到 {len(prompt)} 字符")
-
-            # 根據重試次數調整輸出長度
-            max_output = max(200, 600 - (attempt * 200))  # 逐步減少輸出長度
-
-            # 使用新版 SDK 的設定方式，加入 thinking_config 控制思考 tokens
-            thinking_budget = max(0, min(THINKING_BUDGET, max_output))  # 根據輸出長度調整思考預算
-
-            # 現在可以安全地記錄這些變數
-            app.logger.info(f"使用 thinking_budget: {thinking_budget}, max_output_tokens: {max_output}")
-
-            config = types.GenerateContentConfig(
-                temperature=0.2,  # 降低溫度提高穩定性
-                max_output_tokens=max_output,
-                top_p=0.7,
-                top_k=10,
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=thinking_budget
-                )
-            )
-
-            response = genai_client.models.generate_content(
-                model=GEMINI_MODEL_NAME,
-                contents=prompt,
-                config=config
-            )
-
-            # 檢查回應是否有效
-            if not response or not response.candidates:
-                raise Exception("API 返回空的回應")
-
-            candidate = response.candidates[0]
-
-            # 新版 SDK 使用枚舉值，需要轉換為字符串比較
-            finish_reason_str = str(candidate.finish_reason)
-            app.logger.info(f"finish_reason: {finish_reason_str}")
-
-            if "STOP" in finish_reason_str:  # 正常完成
-                summary_text = response.text
-                app.logger.info(f"重點摘要 ({GEMINI_MODEL_NAME}): {summary_text}")
-                return summary_text
-            elif "MAX_TOKENS" in finish_reason_str:  # MAX_TOKENS
-                if attempt < max_retries - 1:
-                    app.logger.info(f"達到 token 限制，將在下次重試中縮短內容")
-                    raise Exception("達到最大 token 限制，嘗試縮短內容")
-                else:
-                    # 最後一次嘗試失敗，返回簡化版本
-                    simple_prompt = f"請用一句話總結：{transcribed_text[:500]}"
-                    simple_config = types.GenerateContentConfig(
-                        temperature=0.1,
-                        max_output_tokens=100,
-                        top_p=0.5,
-                        thinking_config=types.ThinkingConfig(
-                            thinking_budget=0  # 關閉思考功能，節省 tokens
-                        )
-                    )
-                    try:
-                        app.logger.info("嘗試生成簡化版摘要...")
-                        simple_response = genai_client.models.generate_content(
-                            model=GEMINI_MODEL_NAME,
-                            contents=simple_prompt,
-                            config=simple_config
-                        )
-                        if simple_response and simple_response.text:
-                            app.logger.info(f"簡化版摘要成功: {simple_response.text}")
-                            return f"簡要摘要：{simple_response.text}"
-                    except Exception as simple_e:
-                        app.logger.error(f"簡化版摘要也失敗: {simple_e}")
-                        pass
-                    return f"內容較長，無法完整摘要。主要內容：\n{transcribed_text[:200]}..."
-            elif "SAFETY" in finish_reason_str:  # SAFETY
-                return "⚠️ 內容可能包含敏感資訊，無法產生摘要。"
-            elif "RECITATION" in finish_reason_str:  # RECITATION
-                return "⚠️ 內容可能涉及版權問題，無法產生摘要。"
-            else:
-                raise Exception(f"未知的 finish_reason: {finish_reason_str}")
-
+            # 測試AI服務
+            test_text = "這是一個測試文字，用來檢查Gemini API是否正常運作。"
+            summary = linebot_service.ai_service.generate_summary(test_text)
+            
+            return jsonify({
+                "status": "success",
+                "timestamp": datetime.now().isoformat(),
+                "test_input": test_text,
+                "gemini_response": summary,
+                "api_keys_count": len(config.google_api_keys)
+            })
         except Exception as e:
-            app.logger.error(f"Gemini API 錯誤 (嘗試 {attempt + 1}/{max_retries}): {e}")
+            return jsonify({
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "api_keys_count": len(config.google_api_keys)
+            }), 500
 
-            if "quota" in str(e).lower() or "resource_exhausted" in str(e).lower():
-                return f"⚠️ Gemini API 配額不足，無法產生摘要。\n\n原始內容：\n{transcribed_text}"
-            elif "blocked" in str(e).lower() or "safety" in str(e).lower():
-                return "⚠️ 內容可能包含敏感資訊，無法產生摘要。"
-            elif "MAX_TOKENS" in str(e) or "達到最大 token 限制" in str(e):
-                if attempt < max_retries - 1:
-                    wait_time = 2  # 縮短等待時間
-                    app.logger.info(f"等待 {wait_time} 秒後以更短內容重試...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    return f"內容過長，無法生成完整摘要。\n\n錄音內容：\n{transcribed_text[:300]}..."
-            elif attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 3
-                app.logger.info(f"等待 {wait_time} 秒後重試...")
-                time.sleep(wait_time)
-                continue
-            else:
-                return f"摘要功能暫時無法使用，這是您的錄音內容：\n{transcribed_text}"
-
-    return f"摘要功能暫時無法使用，這是您的錄音內容：\n{transcribed_text}"
-
-
-def safe_reply_message(line_api, reply_token, messages):
-    """安全的回覆訊息函數，處理 reply token 過期問題"""
-    try:
-        line_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=messages
-            )
-        )
-        app.logger.info("訊息回覆成功")
-
-    except Exception as e:
-        app.logger.error(f"回覆訊息失敗: {e}")
-        if "Invalid reply token" in str(e) or "invalid reply token" in str(e).lower():
-            app.logger.warning("Reply token 已過期或無效，無法回覆訊息")
-        else:
-            # 如果不是 reply token 問題，記錄詳細錯誤
-            app.logger.error(f"非 reply token 錯誤: {e}")
-
-
-@handler.add(MessageEvent, message=FileMessageContent)
-def handle_file_message(event):
-    """處理檔案訊息（包含音訊檔案）"""
-    # 直接呼叫音訊處理函數
-    handle_audio_message(event)
-
-
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_text_message(event):
-    line_api = MessagingApi(ApiClient(configuration))
-    user_text = event.message.text
-
-    if user_text.startswith("測試"):
-        try:
-            summary = generate_summary_with_retry(
-                "這是一個測試文字，用來檢查 Gemini 2.5 Flash 是否正常運作。大家在討論工作分配的問題，有人提到時間管理很重要。")
-            safe_reply_message(line_api, event.reply_token, [
-                TextMessage(text=f"✅ 測試成功！\n\n📝 摘要結果：\n{summary}")
-            ])
-        except Exception as e:
-            safe_reply_message(line_api, event.reply_token, [
-                TextMessage(text=f"❌ 測試失敗：{e}")
-            ])
-    else:
-        safe_reply_message(line_api, event.reply_token, [
-            TextMessage(
-                text="🎙️ 請傳送一段錄音，我會為您轉換成逐字稿並整理重點。\n\n💡 或輸入「測試」來檢查摘要功能是否正常。")
-        ])
+    return app
 
 
 if __name__ == "__main__":
-    # 檢查 ffmpeg 是否可用
-    if not check_ffmpeg():
-        print("警告：找不到 ffmpeg，音訊轉換功能可能無法正常運作。")
-        print("請安裝 ffmpeg 並確保它在系統 PATH 中。")
-        print("在 macOS 上，您可以使用 'brew install ffmpeg' 來安裝。")
+    app = create_app()
 
-    # 建立 /tmp 資料夾 (如果不存在)
-    if not os.path.exists("/tmp"):
-        os.makedirs("/tmp")
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    if not AudioService.check_ffmpeg():
+        logging.warning("FFmpeg 不可用")
+
+    # 生產環境設定
+    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True)
