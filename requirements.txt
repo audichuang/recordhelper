@@ -1,0 +1,6 @@
+line-bot-sdk==3.8.0
+flask
+python-dotenv
+openai
+google-genai
+requests
