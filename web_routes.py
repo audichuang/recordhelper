@@ -1,7 +1,8 @@
 import logging
 import markdown
+import os
 from datetime import datetime
-from flask import Flask, request, abort, jsonify, render_template_string
+from flask import Flask, request, abort, jsonify, render_template_string, send_from_directory
 from linebot.v3.exceptions import InvalidSignatureError
 
 from config import AppConfig
@@ -12,6 +13,20 @@ from audio_service import AudioService
 def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineBotService):
     """創建 Flask 路由"""
 
+    @app.route('/favicon.ico')
+    def favicon():
+        """提供 favicon 圖標"""
+        try:
+            # 檢查 favicon.png 是否存在
+            if os.path.exists('favicon.png'):
+                return send_from_directory('.', 'favicon.png', mimetype='image/png')
+            else:
+                # 如果沒有 favicon 文件，返回一個簡單的透明圖標
+                return '', 204
+        except Exception as e:
+            logging.warning(f"提供 favicon 時出錯: {e}")
+            return '', 404
+
     @app.route("/", methods=['GET'])
     def home():
         """首頁"""
@@ -21,6 +36,8 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
         <head>
             <title>異步LINE Bot 錄音助手</title>
             <meta charset="UTF-8">
+            <link rel="icon" type="image/png" href="/favicon.ico">
+            <link rel="shortcut icon" type="image/png" href="/favicon.ico">
             <style>
                 body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
                 .container {{ max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; }}
@@ -50,6 +67,7 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
                 <div class="status">
                     <h3>📊 系統設定</h3>
                     <p><strong>服務時間：</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+                    <p><strong>語音轉文字：</strong> {linebot_service.speech_to_text_service.get_provider_name()}</p>
                     <p><strong>最大工作線程：</strong> {config.max_workers}</p>
                     <p><strong>Webhook超時：</strong> {config.webhook_timeout}秒</p>
                     <p><strong>思考預算：</strong> {config.thinking_budget} tokens</p>
@@ -102,13 +120,17 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
             processing_count = len(linebot_service.processing_status.processing_messages)
             completed_count = len(linebot_service.processing_status.completed_messages)
 
+        # 獲取語音轉文字服務資訊
+        stt_info = linebot_service.speech_to_text_service.get_usage_info()
+        
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "processing_messages": processing_count,
             "completed_messages": completed_count,
             "max_workers": config.max_workers,
-            "ffmpeg_available": AudioService.check_ffmpeg()
+            "ffmpeg_available": AudioService.check_ffmpeg(),
+            "speech_to_text_service": stt_info
         })
 
     @app.route("/test-gemini", methods=['GET'])
@@ -146,6 +168,8 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
             <head>
                 <meta charset="UTF-8">
                 <title>摘要不存在</title>
+                <link rel="icon" type="image/png" href="/favicon.ico">
+                <link rel="shortcut icon" type="image/png" href="/favicon.ico">
                 <style>
                     body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
                     .error { color: #d32f2f; }
@@ -179,6 +203,8 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>錄音摘要 - {{ created_at }}</title>
+            <link rel="icon" type="image/png" href="/favicon.ico">
+            <link rel="shortcut icon" type="image/png" href="/favicon.ico">
             <style>
                 body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
@@ -399,6 +425,8 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>摘要管理 - LINE Bot 錄音助手</title>
+            <link rel="icon" type="image/png" href="/favicon.ico">
+            <link rel="shortcut icon" type="image/png" href="/favicon.ico">
             <style>
                 body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;

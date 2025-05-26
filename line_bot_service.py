@@ -12,7 +12,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent, AudioMessageCo
 from config import AppConfig
 from models import ProcessingStatus, SummaryStorage, AudioProcessingError, APIError
 from audio_service import AudioService, TempFileManager
-from whisper_service import WhisperService
+from speech_to_text_service import SpeechToTextService
 from gemini_service import GeminiService
 
 
@@ -26,7 +26,7 @@ class AsyncLineBotService:
         
         # 初始化各種服務
         self.audio_service = AudioService()
-        self.whisper_service = WhisperService(config)
+        self.speech_to_text_service = SpeechToTextService(config)
         self.gemini_service = GeminiService(config)
         self.processing_status = ProcessingStatus()
         self.summary_storage = SummaryStorage()
@@ -164,7 +164,7 @@ class AsyncLineBotService:
 
             # 3. 語音轉文字
             self.processing_status.update_status(message_id, "transcribing")
-            transcribed_text = self.whisper_service.transcribe_audio(mp3_file)
+            transcribed_text = self.speech_to_text_service.transcribe_audio(mp3_file)
 
             if not transcribed_text:
                 raise AudioProcessingError("無法辨識語音內容")

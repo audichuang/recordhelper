@@ -47,4 +47,20 @@ class WhisperService:
                 raise APIError(f"OpenAI API 錯誤: {e}")
         except Exception as e:
             logging.error(f"Whisper 轉錄失敗: {e}")
-            raise APIError(f"語音轉文字服務錯誤: {e}") 
+            raise APIError(f"語音轉文字服務錯誤: {e}")
+    
+    def get_usage_info(self) -> dict:
+        """獲取使用量資訊"""
+        try:
+            return {
+                "service": "OpenAI Whisper",
+                "model": self.config.whisper_model,
+                "status": "ready"
+            }
+        except Exception as e:
+            logging.warning(f"獲取 OpenAI Whisper 使用量失敗: {e}")
+            return {
+                "service": "OpenAI Whisper",
+                "status": "error",
+                "error": str(e)
+            } 

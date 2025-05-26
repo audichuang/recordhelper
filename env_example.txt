@@ -1,0 +1,38 @@
+# LINE Bot 配置
+LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_頻道訪問令牌
+LINE_CHANNEL_SECRET=你的_LINE_頻道秘密
+
+# 語音轉文字服務配置
+# 可選擇: "openai" 或 "deepgram"
+SPEECH_TO_TEXT_PROVIDER=deepgram
+
+# OpenAI 配置 (當使用 OpenAI Whisper 時)
+OPENAI_API_KEY=你的_OpenAI_API_金鑰
+WHISPER_MODEL_NAME=whisper-1
+
+# Deepgram 配置 (當使用 Deepgram 時)
+DEEPGRAM_API_KEY=你的_Deepgram_API_金鑰
+DEEPGRAM_MODEL=nova-2
+DEEPGRAM_LANGUAGE=zh-TW
+
+# Google Gemini 配置 (AI 摘要服務)
+GOOGLE_API_KEY=你的_Google_API_金鑰
+# 支援多個 API 金鑰輪換使用
+GOOGLE_API_KEY_1=你的_第一個_Google_API_金鑰
+GOOGLE_API_KEY_2=你的_第二個_Google_API_金鑰
+GOOGLE_API_KEY_3=你的_第三個_Google_API_金鑰
+
+# AI 模型配置
+GEMINI_MODEL_NAME=gemini-2.5-flash-preview-05-20
+THINKING_BUDGET=256
+MAX_RETRIES=2
+
+# 系統配置
+MAX_WORKERS=4
+WEBHOOK_TIMEOUT=25
+FULL_ANALYSIS=true
+MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
+
+# 成本比較:
+# OpenAI Whisper: $0.006/分鐘 (更高精度)
+# Deepgram: $0.0043/分鐘 (更便宜，約節省28%) 

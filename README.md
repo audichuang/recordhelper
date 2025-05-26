@@ -5,10 +5,11 @@
 ## 🚀 主要特色
 
 ### 🎯 核心功能
-- **語音轉文字**: 使用 OpenAI Whisper API 進行高精度語音識別
+- **語音轉文字**: 支援 OpenAI Whisper 和 Deepgram 雙引擎，可隨時切換
 - **AI 智能摘要**: 使用 Google Gemini AI 生成結構化摘要
 - **HTML 美化顯示**: 將 Markdown 格式摘要轉換為專業網頁
 - **超長錄音支援**: 智能分段處理，支援 2-3 小時錄音
+- **成本優化**: Deepgram 比 OpenAI Whisper 便宜約 28%
 
 ### ⚡ 性能優化
 - **異步處理**: 避免 LINE webhook 超時和重複訊息
@@ -29,9 +30,11 @@ recordhelper/
 ├── main.py              # 主程序入口
 ├── config.py            # 配置管理
 ├── models.py            # 數據模型和異常類
-├── audio_service.py     # 音訊處理服務
-├── whisper_service.py   # Whisper 語音轉文字服務
-├── gemini_service.py    # Gemini AI 摘要服務
+├── audio_service.py           # 音訊處理服務
+├── whisper_service.py         # OpenAI Whisper 語音轉文字服務
+├── deepgram_service.py        # Deepgram 語音轉文字服務
+├── speech_to_text_service.py  # 統一語音轉文字介面
+├── gemini_service.py          # Gemini AI 摘要服務
 ├── line_bot_service.py  # LINE Bot 核心服務
 ├── web_routes.py        # Flask Web 路由
 ├── requirements.txt     # 依賴套件
@@ -56,10 +59,17 @@ recordhelper/
 - 臨時檔案管理
 - 音訊品質優化
 
-#### `whisper_service.py` - 語音轉文字
-- OpenAI Whisper API 整合
+#### `whisper_service.py` / `deepgram_service.py` - 語音轉文字
+- OpenAI Whisper API 整合 (更高精度)
+- Deepgram API 整合 (更低成本)
 - 音訊檔案大小檢查
 - 轉錄結果處理
+
+#### `speech_to_text_service.py` - 統一介面
+- 支援 OpenAI Whisper 和 Deepgram 無縫切換
+- 統一的 API 介面
+- 自動錯誤處理和重試
+- 服務狀態監控
 
 #### `gemini_service.py` - AI 摘要生成
 - Google Gemini AI 整合
@@ -82,8 +92,10 @@ recordhelper/
 - Python 3.8+
 - FFmpeg
 - LINE Bot Channel
-- OpenAI API Key
-- Google AI API Key
+- 語音轉文字服務 API Key (二選一):
+  - OpenAI API Key (Whisper)
+  - Deepgram API Key 
+- Google AI API Key (Gemini)
 
 ### 2. 安裝依賴
 ```bash
@@ -93,21 +105,40 @@ pip install -r requirements.txt
 ### 3. 環境變數設置
 創建 `.env` 文件：
 ```env
+# LINE Bot 配置
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
 LINE_CHANNEL_SECRET=your_line_channel_secret
+
+# 語音轉文字服務配置 (選擇一個)
+SPEECH_TO_TEXT_PROVIDER=deepgram  # 或 "openai"
+
+# Deepgram 配置 (推薦 - 更便宜)
+DEEPGRAM_API_KEY=your_deepgram_api_key
+DEEPGRAM_MODEL=nova-2
+DEEPGRAM_LANGUAGE=zh-TW
+
+# OpenAI 配置 (備選 - 更精確)
 OPENAI_API_KEY=your_openai_api_key
+WHISPER_MODEL_NAME=whisper-1
+
+# Google Gemini AI 配置 (必需)
 GOOGLE_API_KEY_1=your_google_api_key_1
 GOOGLE_API_KEY_2=your_google_api_key_2
 # 可設置多個 Google API Key (GOOGLE_API_KEY_1 到 GOOGLE_API_KEY_10)
 
 # 可選配置
-WHISPER_MODEL_NAME=whisper-1
 GEMINI_MODEL_NAME=gemini-2.5-flash-preview-05-20
 MAX_WORKERS=4
 WEBHOOK_TIMEOUT=25
 FULL_ANALYSIS=true
 MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
 ```
+
+### 💰 成本比較
+| 服務 | 價格/分鐘 | 特色 | 適用場景 |
+|------|----------|------|---------|
+| **Deepgram** | $0.0043 | 🚀 更快速、更便宜 | 高頻使用、成本敏感 |
+| **OpenAI Whisper** | $0.006 | 🎯 更高精度 | 重要會議、高精度需求 |
 
 ### 4. 啟動服務
 ```bash
@@ -201,6 +232,56 @@ RUN pip install -r requirements.txt
 COPY . .
 CMD ["python", "main.py"]
 ```
+
+## 🧪 測試和驗證
+
+### 語音轉文字服務測試
+```bash
+# 測試語音轉文字服務配置和切換
+python test_speech_to_text.py
+```
+
+### 模塊測試
+```bash
+# 測試所有模塊功能
+python test_modules.py
+```
+
+### 服務切換指南
+
+#### 切換到 Deepgram (推薦)
+1. 設定環境變數：
+   ```env
+   SPEECH_TO_TEXT_PROVIDER=deepgram
+   DEEPGRAM_API_KEY=your_deepgram_api_key
+   ```
+2. 安裝依賴：`pip install deepgram-sdk>=4.0.0`
+3. 重啟服務
+
+#### 切換到 OpenAI Whisper
+1. 設定環境變數：
+   ```env
+   SPEECH_TO_TEXT_PROVIDER=openai
+   OPENAI_API_KEY=your_openai_api_key
+   ```
+2. 重啟服務
+
+### 服務狀態監控
+- **Web 首頁**: 顯示當前使用的語音轉文字服務
+- **健康檢查 API**: `/health` 端點提供詳細的服務狀態
+- **日誌監控**: 系統會記錄服務切換和性能指標
+
+## 📞 技術支援
+
+### 常見問題
+1. **Deepgram API 金鑰獲取**: 訪問 [Deepgram 官網](https://deepgram.com/) 註冊並獲取 API 金鑰
+2. **成本控制**: 設定 Deepgram 的使用限額和告警
+3. **服務切換**: 無需停機，修改環境變數後重啟即可
+
+### 效能調優
+- **Deepgram 模型選擇**: `nova-2` (平衡) 或 `nova-3` (精度更高但稍貴)
+- **語言設定**: 設定正確的語言代碼可提高識別準確度
+- **並發設定**: 根據 API 配額調整 `MAX_WORKERS` 參數
 
 ## 🤝 貢獻
 
