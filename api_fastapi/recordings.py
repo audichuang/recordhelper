@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 recordings_router = APIRouter()
 
 # Pydantic 模型
+class RecordingSummary(BaseModel):
+    """錄音摘要信息 - 用於列表顯示"""
+    id: str
+    title: str
+    duration: Optional[float] = None
+    file_size: int
+    status: str
+    created_at: str
+    has_transcript: bool = False
+    has_summary: bool = False
+
 class RecordingResponse(BaseModel):
     id: str
     title: str
@@ -37,6 +48,13 @@ class RecordingResponse(BaseModel):
 
 class RecordingList(BaseModel):
     recordings: List[RecordingResponse]
+    total: int
+    page: int
+    per_page: int
+
+class RecordingSummaryList(BaseModel):
+    """錄音摘要列表 - 輕量級響應"""
+    recordings: List[RecordingSummary]
     total: int
     page: int
     per_page: int
@@ -187,6 +205,83 @@ async def get_recordings(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="獲取錄音列表失敗"
+        )
+
+
+@recordings_router.get("/summary", response_model=RecordingSummaryList)
+async def get_recordings_summary(
+    page: int = 1,
+    per_page: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """獲取用戶的錄音摘要列表 - 輕量級響應，不包含完整轉錄和摘要文本"""
+    try:
+        # 計算總數
+        count_result = await db.execute(
+            select(func.count(Recording.id)).where(Recording.user_id == current_user.id)
+        )
+        total = count_result.scalar() or 0
+        
+        # 獲取分頁數據
+        offset = (page - 1) * per_page
+        
+        result = await db.execute(
+            select(Recording)
+            .where(Recording.user_id == current_user.id)
+            .order_by(desc(Recording.created_at))
+            .offset(offset)
+            .limit(per_page)
+        )
+        
+        recordings = result.scalars().all()
+        
+        recording_summaries = []
+        for recording in recordings:
+            # 檢查是否有分析結果（不需要獲取完整內容）
+            analysis_result = await db.execute(
+                select(func.count(AnalysisResult.id)).where(AnalysisResult.recording_id == recording.id)
+            )
+            has_analysis = (analysis_result.scalar() or 0) > 0
+            
+            # 檢查分析結果是否有轉錄和摘要
+            if has_analysis:
+                analysis_check = await db.execute(
+                    select(
+                        func.length(AnalysisResult.transcription).label('transcript_length'),
+                        func.length(AnalysisResult.summary).label('summary_length')
+                    ).where(AnalysisResult.recording_id == recording.id)
+                )
+                lengths = analysis_check.first()
+                has_transcript = lengths and (lengths.transcript_length or 0) > 0
+                has_summary = lengths and (lengths.summary_length or 0) > 0
+            else:
+                has_transcript = False
+                has_summary = False
+            
+            recording_summaries.append(RecordingSummary(
+                id=str(recording.id),
+                title=recording.title,
+                duration=recording.duration,
+                file_size=recording.file_size,
+                status=recording.status.value if hasattr(recording.status, 'value') else recording.status,
+                created_at=recording.created_at.isoformat() if recording.created_at else None,
+                has_transcript=has_transcript,
+                has_summary=has_summary
+            ))
+        
+        return RecordingSummaryList(
+            recordings=recording_summaries,
+            total=total,
+            page=page,
+            per_page=per_page
+        )
+        
+    except Exception as e:
+        logger.error(f"獲取錄音摘要列表錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="獲取錄音摘要列表失敗"
         )
 
 
