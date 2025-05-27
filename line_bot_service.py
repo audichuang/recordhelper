@@ -218,7 +218,7 @@ class AsyncLineBotService:
 
     def _send_final_result(self, line_api: MessagingApi, user_id: str,
                            transcribed_text: str, summary_text: str, processing_time: float):
-        """發送最終結果"""
+        """發送最終結果 - 智能分割確保符合 LINE 5000 字符限制"""
         # 統計資訊
         text_length = len(transcribed_text)
         estimated_minutes = text_length / 180
@@ -237,40 +237,140 @@ class AsyncLineBotService:
                 summary_id = self.summary_storage.store_summary(
                     user_id, transcribed_text, summary_text, processing_time, text_length
                 )
-                # 假設部署在 localhost:5001，實際使用時應該用真實域名
                 html_link = f"\n\n🌐 美化顯示：https://chatbot.audiweb.uk/summary/{summary_id}"
                 logging.info(f"生成摘要頁面: {summary_id}")
             except Exception as e:
                 logging.error(f"生成摘要頁面失敗: {e}")
         
-        if is_summary_failed:
-            # 摘要失敗時，確保提供完整轉錄文字
-            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 摘要狀態：\n{summary_text}{length_info}{time_info}"
+        # 準備訊息組件
+        transcribed_header = "🎙️ 錄音轉文字："
+        summary_header = "📝 重點摘要：" if not is_summary_failed else "📝 摘要狀態："
+        stats_info = f"{length_info}{time_info}{html_link}"
+        
+        # 智能分割訊息，確保每條都在 4800 字符內（留有緩衝）
+        messages = []
+        
+        # 第一條：轉錄文字
+        transcribed_msg = f"{transcribed_header}\n{transcribed_text}"
+        if len(transcribed_msg) <= 4800:
+            messages.append(transcribed_msg)
         else:
-            reply_text = f"🎙️ 錄音轉文字：\n{transcribed_text}\n\n📝 重點摘要：\n{summary_text}{length_info}{time_info}{html_link}"
-
-        # 分割長訊息（更智能的分割）
-        if len(reply_text) > 4500:
-            # 第一條：轉錄文字
-            messages = [f"🎙️ 錄音轉文字：\n{transcribed_text}"]
+            # 轉錄文字太長，需要分割
+            max_text_length = 4800 - len(transcribed_header) - 50  # 留緩衝和分頁標記
+            chunks = self._split_text_by_sentences(transcribed_text, max_text_length)
             
-            # 第二條：摘要和統計
-            if is_summary_failed:
-                messages.append(f"📝 摘要狀態：\n{summary_text}{length_info}{time_info}")
-            else:
-                messages.append(f"📝 重點摘要：\n{summary_text}{length_info}{time_info}{html_link}")
+            for i, chunk in enumerate(chunks):
+                if len(chunks) > 1:
+                    header = f"{transcribed_header} ({i+1}/{len(chunks)})"
+                else:
+                    header = transcribed_header
+                messages.append(f"{header}\n{chunk}")
+        
+        # 第二條：摘要
+        summary_msg = f"{summary_header}\n{summary_text}"
+        if len(summary_msg) <= 4800:
+            messages.append(summary_msg)
         else:
-            messages = [reply_text]
+            # 摘要太長，需要分割
+            max_summary_length = 4800 - len(summary_header) - 50
+            summary_chunks = self._split_text_by_sentences(summary_text, max_summary_length)
+            
+            for i, chunk in enumerate(summary_chunks):
+                if len(summary_chunks) > 1:
+                    header = f"{summary_header} ({i+1}/{len(summary_chunks)})"
+                else:
+                    header = summary_header
+                messages.append(f"{header}\n{chunk}")
+        
+        # 第三條：統計資訊
+        if stats_info.strip():
+            stat_msg = f"📊 處理統計{stats_info}"
+            if len(stat_msg) <= 4800:
+                messages.append(stat_msg)
+            else:
+                # 統計資訊太長（理論上不會發生，但保險起見）
+                messages.append(f"📊 處理統計{length_info}{time_info}")
+                if html_link:
+                    messages.append(f"🌐 美化顯示{html_link}")
 
-        # 發送訊息
+        # 發送訊息，加強錯誤處理
+        successful_sends = 0
         for i, msg in enumerate(messages):
             try:
+                # 最終檢查：確保訊息長度不超過 5000
+                if len(msg) > 5000:
+                    logging.warning(f"訊息 {i+1} 長度 {len(msg)} 超過限制，截斷處理")
+                    msg = msg[:4950] + "...\n\n📋 完整內容請查看美化顯示頁面"
+                
                 self._send_push_message(line_api, user_id, msg)
+                successful_sends += 1
+                logging.info(f"成功發送第 {i+1}/{len(messages)} 條訊息 (長度: {len(msg)})")
+                
                 if i < len(messages) - 1:  # 不是最後一條訊息
-                    time.sleep(0.2)  # 訊息間間隔
+                    time.sleep(0.3)  # 訊息間間隔
+                    
             except Exception as e:
-                logging.error(f"發送第{i+1}條訊息失敗: {e}")
-                # 即使某條訊息失敗，也繼續發送其他訊息
+                logging.error(f"發送第{i+1}條訊息失敗 (長度: {len(msg)}): {e}")
+                
+                # 如果是長度問題，嘗試發送簡化版本
+                if "Length must be between" in str(e) and len(msg) > 3000:
+                    try:
+                        simple_msg = f"🎙️ 錄音已處理完成！\n\n📊 文字長度: {text_length} 字\n⏱️ 處理時間: {processing_time:.1f}秒"
+                        if html_link:
+                            simple_msg += f"{html_link}"
+                        
+                        self._send_push_message(line_api, user_id, simple_msg)
+                        logging.info(f"發送簡化版本成功")
+                        successful_sends += 1
+                        break  # 發送成功後跳出
+                    except Exception as e2:
+                        logging.error(f"發送簡化版本也失敗: {e2}")
+        
+        if successful_sends == 0:
+            # 所有訊息都失敗，發送最基本的通知
+            try:
+                basic_msg = f"🎙️ 錄音處理完成\n📊 {text_length}字 / {processing_time:.1f}秒"
+                self._send_push_message(line_api, user_id, basic_msg)
+                logging.info("發送基本通知成功")
+            except Exception as e:
+                logging.error(f"連基本通知都失敗: {e}")
+        
+        logging.info(f"訊息發送完成：{successful_sends}/{len(messages)} 條成功")
+
+    def _split_text_by_sentences(self, text: str, max_length: int) -> list:
+        """按句子分割文字，盡量保持完整性"""
+        if len(text) <= max_length:
+            return [text]
+        
+        # 按句號、問號、驚嘆號分割
+        sentences = []
+        current = ""
+        
+        for char in text:
+            current += char
+            if char in "。！？\n" and len(current) > 50:  # 避免過短的句子
+                sentences.append(current.strip())
+                current = ""
+        
+        if current.strip():
+            sentences.append(current.strip())
+        
+        # 組合句子到合適的長度
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) + 1 <= max_length:
+                current_chunk += sentence
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks if chunks else [text[:max_length]]
 
     def _send_push_message(self, line_api: MessagingApi, user_id: str, text: str):
         """發送推送訊息"""

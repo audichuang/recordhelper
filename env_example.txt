@@ -12,6 +12,10 @@ WHISPER_MODEL_NAME=whisper-1
 
 # Deepgram 配置 (當使用 Deepgram 時)
 DEEPGRAM_API_KEY=你的_Deepgram_API_金鑰
+# 支援多個 Deepgram API 金鑰輪換使用（提高配額和穩定性）
+DEEPGRAM_API_KEY_1=你的_第一個_Deepgram_API_金鑰
+DEEPGRAM_API_KEY_2=你的_第二個_Deepgram_API_金鑰
+DEEPGRAM_API_KEY_3=你的_第三個_Deepgram_API_金鑰
 DEEPGRAM_MODEL=nova-2
 DEEPGRAM_LANGUAGE=zh-TW
 

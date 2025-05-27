@@ -114,6 +114,10 @@ SPEECH_TO_TEXT_PROVIDER=deepgram  # 或 "openai"
 
 # Deepgram 配置 (推薦 - 更便宜)
 DEEPGRAM_API_KEY=your_deepgram_api_key
+# 支援多個 Deepgram API Key 提高穩定性和配額
+DEEPGRAM_API_KEY_1=your_deepgram_api_key_1
+DEEPGRAM_API_KEY_2=your_deepgram_api_key_2
+DEEPGRAM_API_KEY_3=your_deepgram_api_key_3
 DEEPGRAM_MODEL=nova-2
 DEEPGRAM_LANGUAGE=zh-TW
 

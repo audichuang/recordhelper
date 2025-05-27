@@ -26,7 +26,8 @@ def test_configuration():
             print(f"   OpenAI API Key: {'已設定' if config.openai_api_key else '❌ 未設定'}")
             print(f"   Whisper 模型: {config.whisper_model}")
         elif config.speech_to_text_provider == "deepgram":
-            print(f"   Deepgram API Key: {'已設定' if config.deepgram_api_key else '❌ 未設定'}")
+            key_count = len(config.deepgram_api_keys) if config.deepgram_api_keys else 0
+            print(f"   Deepgram API Keys: {key_count} 個已設定")
             print(f"   Deepgram 模型: {config.deepgram_model}")
             print(f"   Deepgram 語言: {config.deepgram_language}")
         
@@ -107,6 +108,9 @@ def print_usage_guide():
     print("   SPEECH_TO_TEXT_PROVIDER=deepgram  # 或 openai")
     print("\n   # Deepgram 配置")
     print("   DEEPGRAM_API_KEY=你的_Deepgram_API_金鑰")
+    print("   # 或支援多個 API Key 提高穩定性：")
+    print("   DEEPGRAM_API_KEY_1=你的_第一個_Deepgram_API_金鑰")
+    print("   DEEPGRAM_API_KEY_2=你的_第二個_Deepgram_API_金鑰")
     print("   DEEPGRAM_MODEL=nova-2")
     print("   DEEPGRAM_LANGUAGE=zh-TW")
     print("\n   # OpenAI 配置")
