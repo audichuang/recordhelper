@@ -16,7 +16,7 @@ from fastapi.security import HTTPBearer
 import uvicorn
 
 from config import AppConfig
-from models import init_db
+from models import init_async_db, close_async_db, get_async_db_session
 from api_fastapi import init_api_routes
 from services.messaging.line_bot_fastapi import LineWebhookHandler
 
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
     
     # 初始化資料庫
     try:
-        await init_database()
+        await init_database(app.state.config)
         logger.info("資料庫初始化完成")
     except Exception as e:
         logger.error(f"資料庫初始化失敗: {e}")
@@ -51,6 +51,13 @@ async def lifespan(app: FastAPI):
     
     # 關閉時執行
     logger.info("關閉FastAPI錄音助手")
+    
+    # 關閉資料庫連接
+    try:
+        await close_async_db()
+        logger.info("資料庫連接已關閉")
+    except Exception as e:
+        logger.error(f"關閉資料庫連接時發生錯誤: {e}")
 
 
 def create_app(config: AppConfig = None) -> FastAPI:
@@ -183,16 +190,12 @@ def setup_error_handlers(app: FastAPI):
         )
 
 
-async def init_database():
+async def init_database(config: AppConfig):
     """初始化資料庫"""
     try:
-        # 對於FastAPI，我們使用同步的SQLAlchemy，但在異步上下文中初始化
-        from models import db
-        from config import AppConfig
-        
-        # 這裡實際上不需要特別的異步初始化
-        # 因為我們使用的是同步SQLAlchemy與異步包裝器
-        logger.info("資料庫連接已配置")
+        # 使用新的異步資料庫初始化函數
+        await init_async_db(config.database_url)
+        logger.info(f"異步資料庫連接已初始化 ({config.database_url})")
         
     except Exception as e:
         logger.error(f"資料庫初始化失敗: {e}")

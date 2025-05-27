@@ -3,8 +3,13 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 import logging
+import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import or_
 
-from models.async_models import User
+# 更新導入，使用新的模型和資料庫會話
+from models import User, get_async_db_session
 from services.auth import AuthService
 from config import AppConfig
 
@@ -20,7 +25,7 @@ security = HTTPBearer()
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
-    name: str
+    username: str
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -40,7 +45,10 @@ class MessageResponse(BaseModel):
 
 
 # 依賴注入
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """獲取當前用戶"""
     try:
         token = credentials.credentials
@@ -53,7 +61,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 detail="無效的令牌"
             )
         
-        user = await User.get_by_id(user_id)
+        # 使用新的異步查詢
+        result = await db.execute(
+            select(User).where(User.id == uuid.UUID(user_id))
+        )
+        user = result.scalars().first()
+        
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -71,11 +84,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 
 @auth_router.post("/register", response_model=AuthResponse)
-async def register(user_data: UserRegister):
+async def register(
+    user_data: UserRegister,
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """用戶註冊"""
     try:
         # 檢查用戶是否已存在
-        existing_user = await User.get_by_email(user_data.email)
+        result = await db.execute(
+            select(User).where(User.email == user_data.email)
+        )
+        existing_user = result.scalars().first()
+        
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -83,15 +103,19 @@ async def register(user_data: UserRegister):
             )
         
         # 創建新用戶
-        user = await User.create(
+        user = User(
             email=user_data.email,
-            password=user_data.password,
-            name=user_data.name
+            username=user_data.username,
+            password=user_data.password
         )
         
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        
         # 生成令牌
-        access_token = AuthService.create_access_token(user.id)
-        refresh_token = AuthService.create_refresh_token(user.id)
+        access_token = AuthService.create_access_token(str(user.id))
+        refresh_token = AuthService.create_refresh_token(str(user.id))
         
         return AuthResponse(
             access_token=access_token,
@@ -110,11 +134,18 @@ async def register(user_data: UserRegister):
 
 
 @auth_router.post("/login", response_model=AuthResponse)
-async def login(login_data: UserLogin):
+async def login(
+    login_data: UserLogin,
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """用戶登入"""
     try:
         # 驗證用戶
-        user = await User.get_by_email(login_data.email)
+        result = await db.execute(
+            select(User).where(User.email == login_data.email)
+        )
+        user = result.scalars().first()
+        
         if not user or not user.check_password(login_data.password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -122,8 +153,8 @@ async def login(login_data: UserLogin):
             )
         
         # 生成令牌
-        access_token = AuthService.create_access_token(user.id)
-        refresh_token = AuthService.create_refresh_token(user.id)
+        access_token = AuthService.create_access_token(str(user.id))
+        refresh_token = AuthService.create_refresh_token(str(user.id))
         
         return AuthResponse(
             access_token=access_token,
@@ -142,7 +173,10 @@ async def login(login_data: UserLogin):
 
 
 @auth_router.post("/refresh", response_model=AuthResponse)
-async def refresh_token(token_data: TokenRefresh):
+async def refresh_token(
+    token_data: TokenRefresh,
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """刷新令牌"""
     try:
         # 驗證刷新令牌
@@ -156,7 +190,11 @@ async def refresh_token(token_data: TokenRefresh):
             )
         
         # 獲取用戶
-        user = await User.get_by_id(user_id)
+        result = await db.execute(
+            select(User).where(User.id == uuid.UUID(user_id))
+        )
+        user = result.scalars().first()
+        
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -164,8 +202,8 @@ async def refresh_token(token_data: TokenRefresh):
             )
         
         # 生成新令牌
-        access_token = AuthService.create_access_token(user.id)
-        refresh_token = AuthService.create_refresh_token(user.id)
+        access_token = AuthService.create_access_token(str(user.id))
+        refresh_token = AuthService.create_refresh_token(str(user.id))
         
         return AuthResponse(
             access_token=access_token,

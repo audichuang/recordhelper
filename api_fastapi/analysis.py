@@ -2,8 +2,11 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
+import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from models.async_models import User, Recording, Analysis
+from models import User, Recording, AnalysisResult, get_async_db_session
 from .auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -15,23 +18,28 @@ analysis_router = APIRouter()
 class AnalysisResponse(BaseModel):
     id: str
     recording_id: str
-    transcript: str
+    transcription: str
     summary: str
-    status: str
-    created_at: str
-    updated_at: str
+    provider: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
 @analysis_router.get("/{recording_id}")
 async def get_analysis(
     recording_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
 ):
     """獲取錄音的分析結果"""
     try:
         # 檢查錄音是否存在且屬於當前用戶
-        recording = await Recording.get_by_id(recording_id)
+        recording_result = await db.execute(
+            select(Recording).where(Recording.id == uuid.UUID(recording_id))
+        )
+        recording = recording_result.scalars().first()
+        
         if not recording:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -45,7 +53,11 @@ async def get_analysis(
             )
         
         # 獲取分析結果
-        analysis = await Analysis.get_by_recording_id(recording_id)
+        analysis_result = await db.execute(
+            select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
+        )
+        analysis = analysis_result.scalars().first()
+        
         if not analysis:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -53,13 +65,13 @@ async def get_analysis(
             )
         
         return AnalysisResponse(
-            id=analysis.id,
-            recording_id=analysis.recording_id,
-            transcript=analysis.transcript,
+            id=str(analysis.id),
+            recording_id=str(analysis.recording_id),
+            transcription=analysis.transcription,
             summary=analysis.summary,
-            status=analysis.status,
-            created_at=analysis.created_at.isoformat(),
-            updated_at=analysis.updated_at.isoformat(),
+            provider=analysis.provider or "",
+            created_at=analysis.created_at.isoformat() if analysis.created_at else None,
+            updated_at=analysis.updated_at.isoformat() if analysis.updated_at else None,
             metadata=analysis.metadata
         )
         

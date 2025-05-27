@@ -58,7 +58,7 @@ class AsyncSpeechToTextService:
                 result = await self._transcribe_with_deepgram(file_path)
             elif self.provider == "local":
                 result = await self._transcribe_with_local_whisper(file_path)
-            elif self.provider == "gemini":
+            elif self.provider == "gemini_audio":
                 result = await self._transcribe_with_gemini_audio(file_path)
             else:
                 # 默認使用OpenAI

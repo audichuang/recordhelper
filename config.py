@@ -83,7 +83,8 @@ class AppConfig:
         db_user = os.getenv("DB_USER", "root")
         db_password = os.getenv("DB_PASSWORD", "VZq9rWbC3oJYFYdDrjT6edewVHQEKNCBWPDnyqxKyzMTE3CoozBrWnYsi6KkpwKujcFKDytQCrxhTbcxsAB2vswcVgQc9ieYvtpP")
         
-        database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+        # 更新為異步驅動
+        database_url = f"postgresql+asyncpg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         
         # JWT 配置
         jwt_secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")

@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func, desc
 
-from models.async_models import User, Recording
+from models import User, Recording, get_async_db_session
 from .auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -15,7 +18,7 @@ users_router = APIRouter()
 class UserProfile(BaseModel):
     id: str
     email: str
-    name: str
+    username: str
     created_at: str
     recording_count: int = 0
 
@@ -23,21 +26,29 @@ class UserStatistics(BaseModel):
     total_recordings: int
     total_duration: float
     total_file_size: int
-    last_recording_date: str = None
+    last_recording_date: Optional[str] = None
 
 
 @users_router.get("/profile", response_model=UserProfile)
-async def get_user_profile(current_user: User = Depends(get_current_user)):
+async def get_user_profile(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """獲取用戶個人資料"""
     try:
         # 獲取錄音數量
-        recording_count = await Recording.count_by_user(current_user.id)
+        result = await db.execute(
+            select(func.count()).select_from(Recording).where(
+                Recording.user_id == current_user.id
+            )
+        )
+        recording_count = result.scalar() or 0
         
         return UserProfile(
-            id=current_user.id,
+            id=str(current_user.id),
             email=current_user.email,
-            name=current_user.name,
-            created_at=current_user.created_at.isoformat(),
+            username=current_user.username,
+            created_at=current_user.created_at.isoformat() if current_user.created_at else None,
             recording_count=recording_count
         )
         
@@ -50,16 +61,50 @@ async def get_user_profile(current_user: User = Depends(get_current_user)):
 
 
 @users_router.get("/statistics", response_model=UserStatistics)
-async def get_user_statistics(current_user: User = Depends(get_current_user)):
+async def get_user_statistics(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
     """獲取用戶統計數據"""
     try:
-        stats = await Recording.get_user_statistics(current_user.id)
+        # 獲取總錄音數量
+        count_result = await db.execute(
+            select(func.count()).select_from(Recording).where(
+                Recording.user_id == current_user.id
+            )
+        )
+        total_recordings = count_result.scalar() or 0
+        
+        # 獲取總時長
+        duration_result = await db.execute(
+            select(func.sum(Recording.duration)).where(
+                Recording.user_id == current_user.id
+            )
+        )
+        total_duration = duration_result.scalar() or 0.0
+        
+        # 獲取總檔案大小
+        size_result = await db.execute(
+            select(func.sum(Recording.file_size)).where(
+                Recording.user_id == current_user.id
+            )
+        )
+        total_file_size = size_result.scalar() or 0
+        
+        # 獲取最近錄音日期
+        date_result = await db.execute(
+            select(Recording.created_at).where(
+                Recording.user_id == current_user.id
+            ).order_by(desc(Recording.created_at)).limit(1)
+        )
+        last_recording = date_result.scalars().first()
+        last_recording_date = last_recording.created_at.isoformat() if last_recording and last_recording.created_at else None
         
         return UserStatistics(
-            total_recordings=stats.get('total_recordings', 0),
-            total_duration=stats.get('total_duration', 0.0),
-            total_file_size=stats.get('total_file_size', 0),
-            last_recording_date=stats.get('last_recording_date')
+            total_recordings=total_recordings,
+            total_duration=total_duration,
+            total_file_size=total_file_size,
+            last_recording_date=last_recording_date
         )
         
     except Exception as e:

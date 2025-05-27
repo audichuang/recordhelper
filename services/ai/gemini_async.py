@@ -128,10 +128,6 @@ class AsyncGeminiService:
                     }
                 }
                 
-                # 添加思考預算（如果支持的話）
-                if self.thinking_budget > 0:
-                    request_data["generationConfig"]["thinkingBudget"] = self.thinking_budget
-                
                 url = f"{self.base_url}/models/{self.model}:generateContent"
                 
                 async with aiohttp.ClientSession() as session:

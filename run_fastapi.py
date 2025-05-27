@@ -23,8 +23,8 @@ def main():
         app = create_app(config)
         
         # 啟動參數
-        host = os.environ.get('HOST', '0.0.0.0')
-        port = int(os.environ.get('PORT', 9527))  # 更特別的端口號
+        host = '0.0.0.0'  # 綁定到所有網絡接口
+        port = int(os.environ.get('PORT', 9527))  # 特別的端口號
         reload = os.environ.get('RELOAD', 'false').lower() == 'true'
         workers = int(os.environ.get('WORKERS', 1))
         
@@ -32,6 +32,7 @@ def main():
 🚀 啟動 FastAPI 錄音助手
 ==========================================
 📡 服務地址: http://{host}:{port}
+📡 Tailscale 地址: http://audimacbookpro:{port}
 📖 API文檔: http://{host}:{port}/docs
 🔄 自動重載: {'開啟' if reload else '關閉'}
 👥 工作進程: {workers}
