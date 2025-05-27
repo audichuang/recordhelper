@@ -6,3 +6,4 @@ google-genai
 requests
 markdown
 deepgram-sdk>=4.0.0
+openai-whisper

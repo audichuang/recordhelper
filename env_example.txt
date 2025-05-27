@@ -1,10 +1,20 @@
-# LINE Bot 配置
+# ⚡ Record Helper 配置檔案
+# 
+# 🚀 快速開始 (Mac M4 Pro 推薦配置):
+# 1. 複製此檔案為 .env
+# 2. 填入您的 LINE Bot 和 Google API 金鑰
+# 3. 使用 faster_whisper 獲得最佳性能
+#
+# 測試命令: python test_faster_whisper.py
+
+# 📱 LINE Bot 配置
 LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_頻道訪問令牌
 LINE_CHANNEL_SECRET=你的_LINE_頻道秘密
 
-# 語音轉文字服務配置
-# 可選擇: "openai" 或 "deepgram"
-SPEECH_TO_TEXT_PROVIDER=deepgram
+# 🚀 語音轉文字服務配置
+# 可選擇: "openai", "deepgram", "local_whisper", 或 "faster_whisper"
+# 推薦: faster_whisper (Mac M4 Pro 最佳選擇，免費且高性能)
+SPEECH_TO_TEXT_PROVIDER=faster_whisper
 
 # OpenAI 配置 (當使用 OpenAI Whisper 時)
 OPENAI_API_KEY=你的_OpenAI_API_金鑰
@@ -18,6 +28,34 @@ DEEPGRAM_API_KEY_2=你的_第二個_Deepgram_API_金鑰
 DEEPGRAM_API_KEY_3=你的_第三個_Deepgram_API_金鑰
 DEEPGRAM_MODEL=nova-2
 DEEPGRAM_LANGUAGE=zh-TW
+
+# 🔥 Faster-Whisper 配置 (推薦！高性能本地服務)
+# 適用於: faster_whisper 和 local_whisper 服務
+# 
+# 📊 Mac M4 Pro 模型選擇指南:
+# ┌─────────┬─────────┬─────────┬──────────┬──────────┐
+# │ 模型    │ 大小    │ 速度    │ 準確性   │ 記憶體   │
+# ├─────────┼─────────┼─────────┼──────────┼──────────┤
+# │ tiny    │ 39MB    │ 極快    │ 普通     │ 低       │
+# │ base    │ 74MB    │ 快      │ 好       │ 低       │
+# │ small   │ 244MB   │ 較快    │ 很好     │ 中等     │ ⭐ 推薦
+# │ turbo   │ 809MB   │ 快      │ 最高     │ 高       │
+# └─────────┴─────────┴─────────┴──────────┴──────────┘
+#
+LOCAL_WHISPER_MODEL=small        # 🏆 推薦：最佳平衡
+# LOCAL_WHISPER_MODEL=turbo      # 🎯 備選：最高準確性  
+# LOCAL_WHISPER_MODEL=base       # ⚡ 備選：最快速度
+# LOCAL_WHISPER_MODEL=tiny       # 💾 備選：記憶體受限
+
+# 可選語言: zh=中文(簡體/繁體), yue=粵語, ja=日語, en=英語, 等
+LOCAL_WHISPER_LANGUAGE=zh
+
+# 任務: transcribe=轉錄, translate=翻譯成英文
+LOCAL_WHISPER_TASK=transcribe
+
+# 計算設備: auto=自動選擇, mps=Apple GPU, cuda=NVIDIA GPU, cpu=CPU
+# 注意: faster-whisper 在 CPU 上已經很快，不需要 GPU
+LOCAL_WHISPER_DEVICE=auto
 
 # Google Gemini 配置 (AI 摘要服務)
 GOOGLE_API_KEY=你的_Google_API_金鑰
@@ -37,6 +75,27 @@ WEBHOOK_TIMEOUT=25
 FULL_ANALYSIS=true
 MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
 
-# 成本比較:
-# OpenAI Whisper: $0.006/分鐘 (更高精度)
-# Deepgram: $0.0043/分鐘 (更便宜，約節省28%) 
+# 💰 服務比較 (Mac M4 Pro):
+# 
+# 🏆 Faster-Whisper (推薦):
+#   - 成本: 免費
+#   - 速度: 極快 (4-8倍於原版 Whisper)
+#   - 準確性: 極高
+#   - 記憶體: 優化 (減少50%)
+#   - 特色: int8量化，多核心並行，支援時間戳
+#
+# ☁️ OpenAI Whisper API: 
+#   - 成本: $0.006/分鐘 
+#   - 速度: 快 (雲端)
+#   - 準確性: 極高
+#
+# ☁️ Deepgram: 
+#   - 成本: $0.0043/分鐘 (節省28%)
+#   - 速度: 最快 (雲端)
+#   - 準確性: 高
+#
+# 🐌 原版 Local Whisper: 
+#   - 成本: 免費
+#   - 速度: 極慢 (194秒)
+#   - 準確性: 極高
+#   - 問題: MPS不相容 

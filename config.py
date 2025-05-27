@@ -14,11 +14,16 @@ class AppConfig:
     openai_api_key: str
     google_api_keys: List[str]
     # 語音轉文字服務配置
-    speech_to_text_provider: str = "openai"  # "openai" 或 "deepgram"
+    speech_to_text_provider: str = "openai"  # "openai", "deepgram", "local_whisper", 或 "faster_whisper"
     whisper_model: str = "whisper-1"
     deepgram_api_keys: List[str] = None  # 支援多個 Deepgram API Key
     deepgram_model: str = "nova-2"
     deepgram_language: str = "zh-TW"  # 中文繁體
+    # 本地 Whisper 配置
+    local_whisper_model: str = "turbo"  # tiny, base, small, medium, large, large-v2, large-v3, turbo
+    local_whisper_language: str = "zh"  # zh=中文(簡體/繁體), yue=粵語, ja=日語, en=英語
+    local_whisper_task: str = "transcribe"  # transcribe 或 translate
+    local_whisper_device: str = "auto"  # auto, mps, cuda, cpu
     # AI 摘要配置
     gemini_model: str = "gemini-2.5-flash-preview-05-20"
     thinking_budget: int = 512
@@ -64,8 +69,11 @@ class AppConfig:
             raise ValueError("使用 OpenAI Whisper 需要設定 OPENAI_API_KEY")
         elif speech_provider == "deepgram" and not deepgram_api_keys:
             raise ValueError("使用 Deepgram 需要設定至少一個 DEEPGRAM_API_KEY")
-        elif speech_provider not in ["openai", "deepgram"]:
-            raise ValueError(f"不支援的語音轉文字服務: {speech_provider}，請選擇 'openai' 或 'deepgram'")
+        elif speech_provider in ["local_whisper", "faster_whisper"]:
+            # 本地 Whisper 服務不需要 API 金鑰
+            pass
+        elif speech_provider not in ["openai", "deepgram", "local_whisper", "faster_whisper"]:
+            raise ValueError(f"不支援的語音轉文字服務: {speech_provider}，請選擇 'openai', 'deepgram', 'local_whisper' 或 'faster_whisper'")
 
         # Google API 金鑰（Gemini 摘要服務）
         google_api_keys = []
@@ -93,6 +101,11 @@ class AppConfig:
             deepgram_api_keys=deepgram_api_keys,
             deepgram_model=os.getenv("DEEPGRAM_MODEL", "nova-2"),
             deepgram_language=os.getenv("DEEPGRAM_LANGUAGE", "zh-TW"),
+            # 本地 Whisper 配置
+            local_whisper_model=os.getenv("LOCAL_WHISPER_MODEL", "turbo"),
+            local_whisper_language=os.getenv("LOCAL_WHISPER_LANGUAGE", "zh"),
+            local_whisper_task=os.getenv("LOCAL_WHISPER_TASK", "transcribe"),
+            local_whisper_device=os.getenv("LOCAL_WHISPER_DEVICE", "auto"),
             # AI 摘要配置
             gemini_model=os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-preview-05-20"),
             thinking_budget=int(os.getenv("THINKING_BUDGET", "256")),  # 降低預設值
