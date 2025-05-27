@@ -135,6 +135,48 @@ def test_gemini_service_module():
         logging.error(f"❌ Gemini 服務模塊錯誤: {e}")
         return False
 
+def test_gemini_audio_service_module():
+    """測試 Gemini 音頻服務模塊"""
+    try:
+        from gemini_audio_service import GeminiAudioService
+        
+        # 創建模擬配置
+        class MockConfig:
+            google_api_keys = ["test_key_1", "test_key_2"]
+        
+        service = GeminiAudioService(MockConfig())
+        logging.info("✅ Gemini 音頻服務模塊結構正常")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Gemini 音頻服務模塊錯誤: {e}")
+        return False
+
+def test_speech_to_text_service_module():
+    """測試語音轉文字服務模塊"""
+    try:
+        from speech_to_text_service import SpeechToTextService
+        
+        # 創建模擬配置
+        class MockConfig:
+            speech_to_text_provider = "openai"
+            openai_api_key = "test_key"
+            whisper_model = "whisper-1"
+            deepgram_api_keys = ["test_deepgram_key"]
+            deepgram_model = "nova-2"
+            deepgram_language = "zh-TW"
+            local_whisper_model = "base"
+            local_whisper_language = "zh"
+            local_whisper_task = "transcribe"
+            local_whisper_device = "cpu"
+            google_api_keys = ["test_google_key"]  # 為 Gemini 音頻服務添加
+        
+        service = SpeechToTextService(MockConfig())
+        logging.info("✅ 語音轉文字服務模塊結構正常")
+        return True
+    except Exception as e:
+        logging.error(f"❌ 語音轉文字服務模塊錯誤: {e}")
+        return False
+
 def test_line_bot_service_module():
     """測試 LINE Bot 服務模塊"""
     try:
@@ -219,8 +261,9 @@ def main():
         ("配置模塊", test_config_module),
         ("數據模型模塊", test_models_module),
         ("音訊服務模塊", test_audio_service_module),
-        ("Whisper 服務模塊", test_whisper_service_module),
         ("Gemini 服務模塊", test_gemini_service_module),
+        ("Gemini 音頻服務模塊", test_gemini_audio_service_module),
+        ("語音轉文字服務模塊", test_speech_to_text_service_module),
         ("LINE Bot 服務模塊", test_line_bot_service_module),
         ("Web 路由模塊", test_web_routes_module),
         ("主模塊", test_main_module),

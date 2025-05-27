@@ -162,20 +162,53 @@ class AsyncLineBotService:
             if not self.audio_service.convert_audio(original_file, mp3_file):
                 raise AudioProcessingError("音訊轉換失敗")
 
-            # 3. 語音轉文字
+            # 3. 語音轉文字與摘要處理
             self.processing_status.update_status(message_id, "transcribing")
-            transcribed_text = self.speech_to_text_service.transcribe_audio(mp3_file)
+            
+            # 檢查是否使用 Gemini 音頻服務
+            if self.config.speech_to_text_provider == "gemini_audio":
+                # Gemini 音頻服務可以同時處理轉錄和摘要
+                logging.info("使用 Gemini 音頻服務進行直接處理")
+                try:
+                    # 嘗試使用組合功能（轉錄+摘要）
+                    result = self.speech_to_text_service.service.transcribe_and_summarize(mp3_file)
+                    transcribed_text = result["transcription"]
+                    summary_text = result["summary"]
+                    
+                    if not transcribed_text:
+                        raise AudioProcessingError("Gemini 無法辨識語音內容")
+                    
+                    logging.info(f"Gemini 直接處理完成，轉錄: {len(transcribed_text)}字, 摘要: {len(summary_text)}字")
+                    
+                except Exception as e:
+                    # 如果組合功能失敗，退回到基本轉錄
+                    logging.warning(f"Gemini 組合功能失敗，使用基本轉錄: {e}")
+                    transcribed_text = self.speech_to_text_service.transcribe_audio(mp3_file)
+                    
+                    if not transcribed_text:
+                        raise AudioProcessingError("無法辨識語音內容")
+                    
+                    # 4. 使用傳統 Gemini 文字摘要
+                    self.processing_status.update_status(message_id, "summarizing")
+                    try:
+                        summary_text = self.gemini_service.generate_summary(transcribed_text)
+                    except Exception as e2:
+                        logging.warning(f"摘要生成失敗: {e2}")
+                        summary_text = "摘要功能暫時無法使用"
+            else:
+                # 其他語音轉文字服務的傳統處理流程
+                transcribed_text = self.speech_to_text_service.transcribe_audio(mp3_file)
 
-            if not transcribed_text:
-                raise AudioProcessingError("無法辨識語音內容")
+                if not transcribed_text:
+                    raise AudioProcessingError("無法辨識語音內容")
 
-            # 4. 生成摘要（非阻塞，失敗也不影響主要功能）
-            self.processing_status.update_status(message_id, "summarizing")
-            try:
-                summary_text = self.gemini_service.generate_summary(transcribed_text)
-            except Exception as e:
-                logging.warning(f"摘要生成失敗: {e}")
-                summary_text = "摘要功能暫時無法使用"
+                # 4. 生成摘要（非阻塞，失敗也不影響主要功能）
+                self.processing_status.update_status(message_id, "summarizing")
+                try:
+                    summary_text = self.gemini_service.generate_summary(transcribed_text)
+                except Exception as e:
+                    logging.warning(f"摘要生成失敗: {e}")
+                    summary_text = "摘要功能暫時無法使用"
 
             # 5. 發送結果
             self.processing_status.update_status(message_id, "sending")

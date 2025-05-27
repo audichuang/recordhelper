@@ -14,7 +14,7 @@ class AppConfig:
     openai_api_key: str
     google_api_keys: List[str]
     # 語音轉文字服務配置
-    speech_to_text_provider: str = "openai"  # "openai", "deepgram", "local_whisper", 或 "faster_whisper"
+    speech_to_text_provider: str = "openai"  # "openai", "deepgram", "local_whisper", "faster_whisper", 或 "gemini_audio"
     whisper_model: str = "whisper-1"
     deepgram_api_keys: List[str] = None  # 支援多個 Deepgram API Key
     deepgram_model: str = "nova-2"
@@ -72,8 +72,11 @@ class AppConfig:
         elif speech_provider in ["local_whisper", "faster_whisper"]:
             # 本地 Whisper 服務不需要 API 金鑰
             pass
-        elif speech_provider not in ["openai", "deepgram", "local_whisper", "faster_whisper"]:
-            raise ValueError(f"不支援的語音轉文字服務: {speech_provider}，請選擇 'openai', 'deepgram', 'local_whisper' 或 'faster_whisper'")
+        elif speech_provider == "gemini_audio":
+            # Gemini 音頻服務使用 Google API 金鑰（稍後會檢查）
+            pass
+        elif speech_provider not in ["openai", "deepgram", "local_whisper", "faster_whisper", "gemini_audio"]:
+            raise ValueError(f"不支援的語音轉文字服務: {speech_provider}，請選擇 'openai', 'deepgram', 'local_whisper', 'faster_whisper' 或 'gemini_audio'")
 
         # Google API 金鑰（Gemini 摘要服務）
         google_api_keys = []
@@ -87,8 +90,12 @@ class AppConfig:
             if single_key:
                 google_api_keys.append(single_key)
 
+        # 檢查 Google API 金鑰需求
         if not google_api_keys:
-            raise ValueError("請設定至少一個 GOOGLE_API_KEY")
+            if speech_provider == "gemini_audio":
+                raise ValueError("使用 Gemini 音頻服務需要設定至少一個 GOOGLE_API_KEY")
+            else:
+                raise ValueError("請設定至少一個 GOOGLE_API_KEY")
 
         return cls(
             line_channel_access_token=line_channel_access_token,

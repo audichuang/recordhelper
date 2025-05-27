@@ -12,8 +12,9 @@ LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_頻道訪問令牌
 LINE_CHANNEL_SECRET=你的_LINE_頻道秘密
 
 # 🚀 語音轉文字服務配置
-# 可選擇: "openai", "deepgram", "local_whisper", 或 "faster_whisper"
+# 可選擇: "openai", "deepgram", "local_whisper", "faster_whisper", 或 "gemini_audio"
 # 推薦: faster_whisper (Mac M4 Pro 最佳選擇，免費且高性能)
+# 新增: gemini_audio (Gemini 2.0 音頻理解，支援直接處理音頻+摘要)
 SPEECH_TO_TEXT_PROVIDER=faster_whisper
 
 # OpenAI 配置 (當使用 OpenAI Whisper 時)
@@ -83,6 +84,14 @@ MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
 #   - 準確性: 極高
 #   - 記憶體: 優化 (減少50%)
 #   - 特色: int8量化，多核心並行，支援時間戳
+#
+# 🆕 Gemini Audio (最新):
+#   - 成本: 依 Gemini API 計費
+#   - 速度: 快 (雲端，單次處理)
+#   - 準確性: 極高
+#   - 特色: 直接音頻理解，同時提供轉錄+摘要，支援非語音內容分析
+#   - 限制: 最大 100MB，9.5小時音頻
+#   - 支援格式: MP3, WAV, AIFF, AAC, OGG, FLAC
 #
 # ☁️ OpenAI Whisper API: 
 #   - 成本: $0.006/分鐘 

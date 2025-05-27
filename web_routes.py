@@ -156,6 +156,39 @@ def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineB
                 "api_keys_count": len(config.google_api_keys)
             }), 500
 
+    @app.route("/test-gemini-audio", methods=['GET'])
+    def test_gemini_audio():
+        """測試 Gemini 音頻服務功能"""
+        try:
+            # 檢查是否使用 Gemini 音頻服務
+            if config.speech_to_text_provider != "gemini_audio":
+                return jsonify({
+                    "status": "info",
+                    "timestamp": datetime.now().isoformat(),
+                    "message": f"當前使用的語音轉文字服務是 '{config.speech_to_text_provider}'，非 Gemini 音頻服務",
+                    "current_provider": linebot_service.speech_to_text_service.get_provider_name(),
+                    "to_enable": "請在 .env 文件中設定 SPEECH_TO_TEXT_PROVIDER=gemini_audio"
+                })
+            
+            # 獲取 Gemini 音頻服務資訊
+            usage_info = linebot_service.speech_to_text_service.service.get_usage_info()
+            
+            return jsonify({
+                "status": "success",
+                "timestamp": datetime.now().isoformat(),
+                "service_info": usage_info,
+                "provider": linebot_service.speech_to_text_service.get_provider_name(),
+                "api_keys_count": len(config.google_api_keys)
+            })
+            
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "provider": config.speech_to_text_provider
+            }), 500
+
     @app.route("/summary/<summary_id>", methods=['GET'])
     def view_summary(summary_id):
         """查看美化後的摘要頁面"""

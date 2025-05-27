@@ -2,10 +2,6 @@ import logging
 from typing import Optional
 from config import AppConfig
 from models import APIError
-from whisper_service import WhisperService
-from deepgram_service import DeepgramService
-from local_whisper_service import LocalWhisperService
-from faster_whisper_service import FasterWhisperService
 
 
 class SpeechToTextService:
@@ -15,26 +11,34 @@ class SpeechToTextService:
         self.config = config
         self.provider = config.speech_to_text_provider.lower()
         
-        # 初始化對應的服務
+        # 按需初始化對應的服務
         if self.provider == "openai":
+            from whisper_service import WhisperService
             self.service = WhisperService(config)
             logging.info("使用 OpenAI Whisper API 語音轉文字服務")
         elif self.provider == "deepgram":
+            from deepgram_service import DeepgramService
             self.service = DeepgramService(config)
             logging.info("使用 Deepgram 語音轉文字服務")
         elif self.provider == "local_whisper":
+            from local_whisper_service import LocalWhisperService
             self.service = LocalWhisperService(config)
             logging.info("使用本地 OpenAI Whisper 語音轉文字服務")
         elif self.provider == "faster_whisper":
+            from faster_whisper_service import FasterWhisperService
             self.service = FasterWhisperService(config)
             logging.info("使用 Faster-Whisper 高性能語音轉文字服務")
+        elif self.provider == "gemini_audio":
+            from gemini_audio_service import GeminiAudioService
+            self.service = GeminiAudioService(config)
+            logging.info("使用 Gemini 音頻轉文字服務")
         else:
             raise ValueError(f"不支援的語音轉文字服務提供商: {config.speech_to_text_provider}")
     
     def transcribe_audio(self, audio_file_path: str) -> str:
         """轉換語音為文字"""
         try:
-            if self.provider in ["openai", "deepgram", "local_whisper", "faster_whisper"]:
+            if self.provider in ["openai", "deepgram", "local_whisper", "faster_whisper", "gemini_audio"]:
                 return self.service.transcribe_audio(audio_file_path)
             else:
                 raise APIError(f"未知的語音轉文字服務: {self.provider}")
@@ -77,6 +81,7 @@ class SpeechToTextService:
             "openai": "OpenAI Whisper API",
             "deepgram": "Deepgram",
             "local_whisper": "本地 OpenAI Whisper",
-            "faster_whisper": "Faster-Whisper (高性能)"
+            "faster_whisper": "Faster-Whisper (高性能)",
+            "gemini_audio": "Gemini 音頻轉文字"
         }
         return provider_names.get(self.provider, self.provider) 
