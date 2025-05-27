@@ -65,7 +65,7 @@ def test_message_splitting():
     try:
         # 創建模擬的 LINE Bot 服務
         from config import AppConfig
-        from line_bot_service import AsyncLineBotService
+        from services.messaging.line_bot import AsyncLineBotService
         
         # 創建模擬配置
         config = Mock()

@@ -9,8 +9,8 @@ import os
 from flask import Flask
 
 from config import AppConfig
-from line_bot_service import AsyncLineBotService
-from web_routes import create_web_routes
+from services.messaging.line_bot import AsyncLineBotService
+from services.web.routes import create_web_routes
 
 
 def setup_logging():

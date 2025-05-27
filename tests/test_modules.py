@@ -44,7 +44,7 @@ def test_config_module():
 def test_models_module():
     """測試數據模型模塊"""
     try:
-        from models import ProcessingStatus, SummaryStorage, AudioProcessingError, APIError
+        from models.base import ProcessingStatus, SummaryStorage, AudioProcessingError, APIError
         
         # 測試處理狀態管理
         status = ProcessingStatus()
@@ -76,7 +76,7 @@ def test_models_module():
 def test_audio_service_module():
     """測試音訊服務模塊"""
     try:
-        from audio_service import AudioService, TempFileManager
+        from services.audio.from audio_service import import AudioService, TempFileManager
         
         # 測試 FFmpeg 檢查
         ffmpeg_available = AudioService.check_ffmpeg()
@@ -97,7 +97,7 @@ def test_audio_service_module():
 def test_whisper_service_module():
     """測試 Whisper 服務模塊"""
     try:
-        from whisper_service import WhisperService
+        from services.audio.from whisper_service import import WhisperService
         from config import AppConfig
         
         # 創建模擬配置
@@ -116,7 +116,7 @@ def test_whisper_service_module():
 def test_gemini_service_module():
     """測試 Gemini 服務模塊"""
     try:
-        from gemini_service import GeminiService
+        from services.ai.gemini import GeminiService
         
         # 創建模擬配置
         class MockConfig:
@@ -138,7 +138,7 @@ def test_gemini_service_module():
 def test_gemini_audio_service_module():
     """測試 Gemini 音頻服務模塊"""
     try:
-        from gemini_audio_service import GeminiAudioService
+        from services.audio.from gemini_audio_service import import GeminiAudioService
         
         # 創建模擬配置
         class MockConfig:
@@ -154,7 +154,7 @@ def test_gemini_audio_service_module():
 def test_speech_to_text_service_module():
     """測試語音轉文字服務模塊"""
     try:
-        from speech_to_text_service import SpeechToTextService
+        from services.audio.speech_to_text import SpeechToTextService
         
         # 創建模擬配置
         class MockConfig:
@@ -180,7 +180,7 @@ def test_speech_to_text_service_module():
 def test_line_bot_service_module():
     """測試 LINE Bot 服務模塊"""
     try:
-        from line_bot_service import AsyncLineBotService
+        from services.messaging.line_bot import AsyncLineBotService
         
         # 創建模擬配置
         class MockConfig:

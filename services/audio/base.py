@@ -4,7 +4,7 @@ import tempfile
 import uuid
 import logging
 from typing import List
-from models import AudioProcessingError
+from models.base import AudioProcessingError
 
 
 class TempFileManager:

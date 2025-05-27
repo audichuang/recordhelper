@@ -8,7 +8,7 @@ import sys
 import time
 import logging
 from pathlib import Path
-from faster_whisper_service import FasterWhisperService
+from services.audio.from faster_whisper_service import import FasterWhisperService
 
 # 設定日誌
 logging.basicConfig(

@@ -3,7 +3,7 @@ import time
 import logging
 import openai
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class WhisperService:

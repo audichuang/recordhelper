@@ -6,8 +6,8 @@ from flask import Flask, request, abort, jsonify, render_template_string, send_f
 from linebot.v3.exceptions import InvalidSignatureError
 
 from config import AppConfig
-from line_bot_service import AsyncLineBotService
-from audio_service import AudioService
+from services.messaging.line_bot import AsyncLineBotService
+from services.audio.base import AudioService
 
 
 def create_web_routes(app: Flask, config: AppConfig, linebot_service: AsyncLineBotService):

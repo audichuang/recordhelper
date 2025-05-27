@@ -4,7 +4,7 @@ import logging
 import random
 from deepgram import DeepgramClient, PrerecordedOptions, FileSource
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class DeepgramService:

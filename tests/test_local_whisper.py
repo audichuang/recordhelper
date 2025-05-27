@@ -9,7 +9,7 @@ import time
 import logging
 from pathlib import Path
 from config import AppConfig
-from local_whisper_service import LocalWhisperService
+from services.audio.from local_whisper_service import import LocalWhisperService
 
 # 設定日誌
 logging.basicConfig(

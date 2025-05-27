@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from google import genai
 from google.genai import types
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class GeminiAudioService:
@@ -94,8 +94,19 @@ class GeminiAudioService:
             logging.error(f"Gemini 音頻轉錄失敗 (耗時{processing_time:.2f}秒): {e}")
             raise
 
-    def _transcribe_and_summarize_legacy(self, audio_file_path: str) -> Dict[str, str]:
-        """同時進行轉錄和摘要"""
+    def _transcribe_and_summarize_legacy_deprecated(self, audio_file_path: str) -> Dict[str, str]:
+        """
+        已棄用的方法：同時進行轉錄和摘要
+        
+        此方法違反了單一職責原則，已被棄用。
+        請使用 transcribe_audio() 進行語音轉文字，
+        然後使用 GeminiService.generate_summary() 進行摘要生成。
+        """
+        logging.warning("調用了已棄用的 _transcribe_and_summarize_legacy_deprecated 方法，請使用分離的轉錄和摘要服務")
+        
+        # 重定向到正確的分離流程
+        raise APIError("此方法已棄用，請使用分離的轉錄和摘要服務")
+        
         start_time = time.time()
         
         try:

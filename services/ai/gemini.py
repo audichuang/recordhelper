@@ -3,7 +3,7 @@ import logging
 from google import genai
 from google.genai import types
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class GeminiService:

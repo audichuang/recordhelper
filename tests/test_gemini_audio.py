@@ -26,8 +26,8 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from config import AppConfig
-from gemini_audio_service import GeminiAudioService
-from models import APIError
+from services.audio.from gemini_audio_service import import GeminiAudioService
+from models.base import APIError
 
 
 def test_gemini_audio_basic():

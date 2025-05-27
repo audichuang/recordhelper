@@ -4,8 +4,8 @@
 """
 
 import logging
-from gemini_audio_service import GeminiAudioService
-from speech_to_text_service import SpeechToTextService
+from services.audio.from gemini_audio_service import import GeminiAudioService
+from services.audio.speech_to_text import SpeechToTextService
 from config import AppConfig
 
 # 設置日誌

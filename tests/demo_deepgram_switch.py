@@ -8,7 +8,7 @@ import os
 import sys
 import logging
 from config import AppConfig
-from speech_to_text_service import SpeechToTextService
+from services.audio.speech_to_text import SpeechToTextService
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

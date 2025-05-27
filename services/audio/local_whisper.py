@@ -5,7 +5,7 @@ import whisper
 import torch
 from typing import Optional, Dict, Any
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class LocalWhisperService:

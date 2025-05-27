@@ -4,7 +4,7 @@ import logging
 from faster_whisper import WhisperModel
 from typing import Optional, Dict, Any
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class FasterWhisperService:

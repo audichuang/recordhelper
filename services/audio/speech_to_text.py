@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 from config import AppConfig
-from models import APIError
+from models.base import APIError
 
 
 class SpeechToTextService:
@@ -13,23 +13,23 @@ class SpeechToTextService:
         
         # 按需初始化對應的服務
         if self.provider == "openai":
-            from whisper_service import WhisperService
+            from .whisper import WhisperService
             self.service = WhisperService(config)
             logging.info("使用 OpenAI Whisper API 語音轉文字服務")
         elif self.provider == "deepgram":
-            from deepgram_service import DeepgramService
+            from .deepgram import DeepgramService
             self.service = DeepgramService(config)
             logging.info("使用 Deepgram 語音轉文字服務")
         elif self.provider == "local_whisper":
-            from local_whisper_service import LocalWhisperService
+            from .local_whisper import LocalWhisperService
             self.service = LocalWhisperService(config)
             logging.info("使用本地 OpenAI Whisper 語音轉文字服務")
         elif self.provider == "faster_whisper":
-            from faster_whisper_service import FasterWhisperService
+            from .faster_whisper import FasterWhisperService
             self.service = FasterWhisperService(config)
             logging.info("使用 Faster-Whisper 高性能語音轉文字服務")
         elif self.provider == "gemini_audio":
-            from gemini_audio_service import GeminiAudioService
+            from .gemini_audio import GeminiAudioService
             self.service = GeminiAudioService(config)
             logging.info("使用 Gemini 音頻轉文字服務")
         else:
