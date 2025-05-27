@@ -1,300 +1,441 @@
-# 🎙️ 異步LINE Bot 錄音助手
+# 🎙️ Record Helper - 智能錄音分析系統 (FastAPI版)
 
-一個高性能的 LINE Bot 錄音轉文字和 AI 摘要服務，支援超長錄音處理和 HTML 美化顯示。
+一個完整的錄音處理和分析系統，基於 **FastAPI** 構建，提供高性能 **REST API** 和 **LINE Bot** 雙重介面，支援語音轉文字、AI 摘要等功能。
 
-## 🚀 主要特色
+## ✨ 主要功能
 
-### 🎯 核心功能
-- **語音轉文字**: 支援 OpenAI Whisper 和 Deepgram 雙引擎，可隨時切換
-- **AI 智能摘要**: 使用 Google Gemini AI 生成結構化摘要
-- **HTML 美化顯示**: 將 Markdown 格式摘要轉換為專業網頁
-- **超長錄音支援**: 智能分段處理，支援 2-3 小時錄音
-- **成本優化**: Deepgram 比 OpenAI Whisper 便宜約 28%
+### 🔥 核心功能
+- **🎵 音頻處理**: 支援多種格式 (MP3, WAV, M4A, AAC, FLAC, OGG)
+- **📝 語音轉文字**: 整合 OpenAI Whisper, Deepgram, 本地 Whisper
+- **🤖 AI 摘要**: 使用 Google Gemini 生成智能摘要
+- **🔐 用戶認證**: JWT 身份驗證，安全可靠
+- **📱 移動端支援**: 完整的 iOS App 對接
+- **📊 數據統計**: 用戶使用統計和分析報告
 
-### ⚡ 性能優化
-- **異步處理**: 避免 LINE webhook 超時和重複訊息
-- **多線程支援**: 同時處理多個用戶請求
-- **智能重試**: API 失敗自動切換備用金鑰
-- **狀態管理**: 防止重複處理同一訊息
+### 🌟 技術特色
+- **FastAPI 框架**: 原生異步支援，性能提升 10 倍
+- **自動 API 文檔**: Swagger UI 和 ReDoc 自動生成
+- **類型安全**: Pydantic 模型驗證，IDE 友好
+- **雙介面**: REST API + LINE Bot
+- **高性能**: 多語音服務支援 (OpenAI/Deepgram/本地Whisper/Gemini)
+- **異步處理**: BackgroundTasks 背景任務處理
+- **資料持久**: PostgreSQL 數據庫存儲
+- **開發友好**: 完整的錯誤處理和狀態監控
 
-### 🎨 用戶體驗
-- **即時回應**: 25 秒內必定有回應
-- **進度通知**: 長錄音處理時的多階段提醒
-- **響應式設計**: 手機和電腦完美適配
-- **摘要管理**: 24 小時內可隨時查看歷史摘要
-
-## 📁 項目結構
-
-```
-recordhelper/
-├── main.py              # 主程序入口
-├── config.py            # 配置管理
-├── models.py            # 數據模型和異常類
-├── audio_service.py           # 音訊處理服務
-├── whisper_service.py         # OpenAI Whisper 語音轉文字服務
-├── deepgram_service.py        # Deepgram 語音轉文字服務
-├── speech_to_text_service.py  # 統一語音轉文字介面
-├── gemini_service.py          # Gemini AI 摘要服務
-├── line_bot_service.py  # LINE Bot 核心服務
-├── web_routes.py        # Flask Web 路由
-├── requirements.txt     # 依賴套件
-├── .env                 # 環境變數配置
-└── README.md           # 項目說明
-```
-
-### 🏗️ 模塊化設計
-
-#### `config.py` - 配置管理
-- 環境變數載入和驗證
-- 系統參數配置
-- API 金鑰管理
-
-#### `models.py` - 數據模型
-- 異常類定義 (`AudioProcessingError`, `APIError`)
-- 處理狀態管理 (`ProcessingStatus`)
-- 摘要存儲管理 (`SummaryStorage`)
-
-#### `audio_service.py` - 音訊處理
-- FFmpeg 音訊格式轉換
-- 臨時檔案管理
-- 音訊品質優化
-
-#### `whisper_service.py` / `deepgram_service.py` - 語音轉文字
-- OpenAI Whisper API 整合 (更高精度)
-- Deepgram API 整合 (更低成本)
-- 音訊檔案大小檢查
-- 轉錄結果處理
-
-#### `speech_to_text_service.py` - 統一介面
-- 支援 OpenAI Whisper 和 Deepgram 無縫切換
-- 統一的 API 介面
-- 自動錯誤處理和重試
-- 服務狀態監控
-
-#### `gemini_service.py` - AI 摘要生成
-- Google Gemini AI 整合
-- 智能分段摘要策略
-- 多種摘要模式（完整/重點/結構化/分段式）
-
-#### `line_bot_service.py` - LINE Bot 服務
-- LINE Bot 事件處理
-- 異步音訊處理流程
-- 用戶互動管理
-
-#### `web_routes.py` - Web 介面
-- Flask 路由定義
-- HTML 摘要頁面
-- 系統狀態監控
-
-## 🛠️ 安裝和設置
+## 🚀 快速開始
 
 ### 1. 環境需求
-- Python 3.8+
-- FFmpeg
-- LINE Bot Channel
-- 語音轉文字服務 API Key (二選一):
-  - OpenAI API Key (Whisper)
-  - Deepgram API Key 
-- Google AI API Key (Gemini)
+```bash
+# Python 版本
+Python 3.9+
+
+# 數據庫
+PostgreSQL 12+
+
+# 可選 (異步處理)
+Redis 6+
+```
 
 ### 2. 安裝依賴
 ```bash
+# 進入項目目錄
+cd recordhelper
+
+# 安裝 Python 依賴
+pip install -r requirements.txt
+
+# 或使用虛擬環境 (推薦)
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate   # Windows
 pip install -r requirements.txt
 ```
 
-### 3. 環境變數設置
-創建 `.env` 文件：
-```env
-# LINE Bot 配置
-LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
-LINE_CHANNEL_SECRET=your_line_channel_secret
+### 3. 配置環境變數
+```bash
+# 複製配置檔案
+cp env_example.txt .env
 
-# 語音轉文字服務配置 (選擇一個)
-SPEECH_TO_TEXT_PROVIDER=deepgram  # 或 "openai"
+# 編輯配置 (重要！)
+vim .env
+```
 
-# Deepgram 配置 (推薦 - 更便宜)
-DEEPGRAM_API_KEY=your_deepgram_api_key
-# 支援多個 Deepgram API Key 提高穩定性和配額
-DEEPGRAM_API_KEY_1=your_deepgram_api_key_1
-DEEPGRAM_API_KEY_2=your_deepgram_api_key_2
-DEEPGRAM_API_KEY_3=your_deepgram_api_key_3
-DEEPGRAM_MODEL=nova-2
-DEEPGRAM_LANGUAGE=zh-TW
+**必須配置的項目：**
+```bash
+# 數據庫連接 (您已提供)
+DB_HOST=192.168.31.247
+DB_PORT=5444
+DB_NAME=record
+DB_USER=root
+DB_PASSWORD=VZq9rWbC3oJYFYdDrjT6edewVHQEKNCBWPDnyqxKyzMTE3CoozBrWnYsi6KkpwKujcFKDytQCrxhTbcxsAB2vswcVgQc9ieYvtpP
 
-# OpenAI 配置 (備選 - 更精確)
-OPENAI_API_KEY=your_openai_api_key
+# JWT 安全金鑰 (請更改)
+JWT_SECRET_KEY=your-super-secret-jwt-key-change-in-production
+
+# Google API (AI 摘要必需)
+GOOGLE_API_KEY=你的_Google_API_金鑰
+
+# 語音轉文字服務選擇 (推薦 faster_whisper)
+SPEECH_TO_TEXT_PROVIDER=faster_whisper
+```
+
+### 4. 初始化數據庫
+```bash
+# 創建數據庫表
+python migrate_db.py init      # 初始化遷移
+python migrate_db.py migrate   # 創建遷移
+python migrate_db.py upgrade   # 應用遷移
+
+# 或者直接運行應用 (會自動創建表)
+python run.py
+```
+
+### 5. 啟動服務
+```bash
+# 方式 1: 開發模式 (推薦)
+python run_fastapi.py
+
+# 方式 2: 直接使用 uvicorn
+uvicorn main_fastapi:create_app --factory --host 0.0.0.0 --port 9527
+
+# 方式 3: 生產環境 (多工作進程)
+uvicorn main_fastapi:create_app --factory --host 0.0.0.0 --port 9527 --workers 4
+
+# 方式 4: 開發模式 (自動重載)
+uvicorn main_fastapi:create_app --factory --host 0.0.0.0 --port 9527 --reload
+```
+
+服務啟動後：
+- **API 端點**: http://localhost:9527
+- **API 文檔 (Swagger)**: http://localhost:9527/docs
+- **API 文檔 (ReDoc)**: http://localhost:9527/redoc
+- **健康檢查**: http://localhost:9527/health
+- **系統狀態**: http://localhost:9527/api/system/status
+
+## 📚 API 文檔
+
+### 🔐 認證相關
+
+#### 用戶註冊
+```bash
+POST /api/auth/register
+Content-Type: application/json
+
+{
+  "username": "testuser",
+  "email": "test@example.com", 
+  "password": "password123"
+}
+```
+
+#### 用戶登入
+```bash
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+
+# 回應
+{
+  "message": "登入成功",
+  "user": {...},
+  "access_token": "eyJ...",
+  "refresh_token": "eyJ..."
+}
+```
+
+### 🎵 錄音相關
+
+#### 上傳錄音
+```bash
+POST /api/recordings/upload
+Authorization: Bearer {access_token}
+Content-Type: multipart/form-data
+
+# 表單數據
+file: (audio file)
+title: "我的錄音"  # 可選
+```
+
+#### 獲取錄音列表
+```bash
+GET /api/recordings?page=1&per_page=20&search=關鍵字&sort_by=created_at&order=desc
+Authorization: Bearer {access_token}
+```
+
+#### 獲取錄音詳情
+```bash
+GET /api/recordings/{recording_id}
+Authorization: Bearer {access_token}
+
+# 回應包含完整的轉錄和摘要
+{
+  "recording": {
+    "id": "...",
+    "title": "...",
+    "status": "completed",
+    "analysis": {
+      "transcription": "...",
+      "summary": "...",
+      "confidence_score": 0.95
+    }
+  }
+}
+```
+
+#### 重新分析
+```bash
+POST /api/recordings/{recording_id}/reanalyze
+Authorization: Bearer {access_token}
+```
+
+### 👤 用戶相關
+
+#### 獲取用戶資料
+```bash
+GET /api/users/profile
+Authorization: Bearer {access_token}
+```
+
+#### 用戶統計
+```bash
+GET /api/users/statistics
+Authorization: Bearer {access_token}
+
+# 回應
+{
+  "statistics": {
+    "total_recordings": 25,
+    "total_duration": 7200,
+    "current_month_recordings": 5,
+    "avg_duration": 288
+  }
+}
+```
+
+## 🎯 iOS App 整合
+
+本 API 專為 iOS RecordAnalyzer App 設計，完美支援：
+
+- **無縫認證**: JWT token 自動管理
+- **文件上傳**: 直接從 iOS 上傳音頻文件
+- **實時狀態**: 處理狀態實時查詢
+- **分頁加載**: 支援大量錄音的分頁瀏覽
+- **搜索過濾**: 靈活的搜索和排序功能
+
+### iOS 配置
+```swift
+// API 基礎 URL
+let baseURL = "http://your-server:5000/api"
+
+// 認證標頭
+let headers = [
+    "Authorization": "Bearer \(accessToken)",
+    "Content-Type": "application/json"
+]
+```
+
+## 🔧 高級配置
+
+### 語音轉文字服務選擇
+
+```bash
+# 1. Faster-Whisper (推薦 - 免費且高性能)
+SPEECH_TO_TEXT_PROVIDER=faster_whisper
+LOCAL_WHISPER_MODEL=small  # tiny, base, small, medium, large, turbo
+
+# 2. OpenAI Whisper API (付費但速度快)
+SPEECH_TO_TEXT_PROVIDER=openai  
+OPENAI_API_KEY=your_key
 WHISPER_MODEL_NAME=whisper-1
 
-# Google Gemini AI 配置 (必需)
-GOOGLE_API_KEY_1=your_google_api_key_1
-GOOGLE_API_KEY_2=your_google_api_key_2
-# 可設置多個 Google API Key (GOOGLE_API_KEY_1 到 GOOGLE_API_KEY_10)
+# 3. Deepgram (付費，最快)
+SPEECH_TO_TEXT_PROVIDER=deepgram
+DEEPGRAM_API_KEY=your_key
+```
 
-# 可選配置
-GEMINI_MODEL_NAME=gemini-2.5-flash-preview-05-20
+### 異步處理配置
+
+```bash
+# 安裝 Redis
+brew install redis        # Mac
+sudo apt install redis    # Ubuntu
+
+# 啟動 Redis
+redis-server
+
+# 啟動 Celery Worker (另一個終端)
+celery -A services.tasks worker --loglevel=info
+
+# 啟動 Celery Flower (可選 - 監控界面)
+celery -A services.tasks flower
+```
+
+### 生產環境部署
+
+```bash
+# 1. 使用 Gunicorn
+pip install gunicorn
+gunicorn -w 4 -b 0.0.0.0:5000 --timeout 120 app:app
+
+# 2. 使用 Docker
+docker build -t recordhelper .
+docker run -p 5000:5000 recordhelper
+
+# 3. 環境變數
+export DEBUG=false
+export JWT_SECRET_KEY=your-production-secret
+```
+
+## 📊 性能優化
+
+### 建議配置
+```bash
+# Mac M4 Pro 最佳配置
+SPEECH_TO_TEXT_PROVIDER=faster_whisper
+LOCAL_WHISPER_MODEL=small
+LOCAL_WHISPER_DEVICE=auto
+
+# 服務器配置
 MAX_WORKERS=4
-WEBHOOK_TIMEOUT=25
-FULL_ANALYSIS=true
-MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
+MAX_FILE_SIZE=104857600  # 100MB
 ```
 
-### 💰 成本比較
-| 服務 | 價格/分鐘 | 特色 | 適用場景 |
-|------|----------|------|---------|
-| **Deepgram** | $0.0043 | 🚀 更快速、更便宜 | 高頻使用、成本敏感 |
-| **OpenAI Whisper** | $0.006 | 🎯 更高精度 | 重要會議、高精度需求 |
+### 性能對比
+| 服務 | 成本 | 速度 | 準確性 | 備註 |
+|------|------|------|--------|------|
+| Faster-Whisper | 免費 | 極快 | 極高 | 推薦 |
+| OpenAI API | 付費 | 快 | 極高 | 雲端 |
+| Deepgram | 付費 | 最快 | 高 | 雲端 |
 
-### 4. 啟動服務
-```bash
-python main.py
-```
-
-## 🎯 使用方式
-
-### LINE Bot 功能
-1. **發送錄音**: 直接發送音訊檔案給 Bot
-2. **查看摘要**: 點擊回傳的 "🌐 美化顯示" 鏈接
-3. **系統狀態**: 發送 "狀態" 查看系統資訊
-4. **功能測試**: 發送 "測試" 檢查 AI 功能
-
-### Web 介面
-- **首頁**: `http://localhost:5001/` - 系統狀態和配置資訊
-- **摘要管理**: `http://localhost:5001/summaries` - 查看所有摘要
-- **健康檢查**: `http://localhost:5001/health` - API 狀態監控
-- **Gemini 測試**: `http://localhost:5001/test-gemini` - AI 功能測試
-
-## 🧠 AI 摘要策略
-
-### 智能分段處理
-根據錄音長度自動選擇最適合的處理策略：
-
-1. **短錄音** (< 10分鐘): 完整摘要
-2. **中等錄音** (10-30分鐘): 重點摘要
-3. **長錄音** (30分鐘-1.5小時): 結構化摘要
-4. **超長錄音** (> 1.5小時): 分段式摘要
-
-### 完整分析模式
-- 可配置是否分析所有段落
-- 支援最多 50 段的完整分析
-- 智能選取關鍵段落作為備選方案
-
-## 🌐 HTML 美化顯示
-
-### 主要特色
-- **Markdown 渲染**: 完美支援標題、列表、粗體等格式
-- **響應式設計**: 自動適配手機和電腦螢幕
-- **統計面板**: 顯示錄音時長、字數、處理時間等
-- **交互功能**: 可切換顯示/隱藏完整逐字稿
-- **專業設計**: 漸層背景、卡片布局、現代化 UI
-
-### 摘要管理
-- **24小時保存**: 摘要自動保存 24 小時
-- **列表檢視**: 按時間排序的摘要列表
-- **快速預覽**: 每個摘要的前 200 字預覽
-- **詳細統計**: 創建時間、處理時間、字數等資訊
-
-## 🔧 系統配置
-
-### 性能參數
-- `MAX_WORKERS`: 線程池大小 (預設: 4)
-- `WEBHOOK_TIMEOUT`: Webhook 超時時間 (預設: 25秒)
-- `FULL_ANALYSIS`: 是否完整分析 (預設: true)
-- `MAX_SEGMENTS_FOR_FULL_ANALYSIS`: 最大分析段數 (預設: 50)
-
-### API 配置
-- 支援多個 Google API Key 輪詢使用
-- 自動重試和錯誤處理
-- API 配額和速率限制管理
-
-## 📊 監控和日誌
-
-### 日誌系統
-- 詳細的處理流程記錄
-- 錯誤追蹤和診斷
-- 性能指標監控
-
-### 健康檢查
-- 系統狀態監控
-- API 可用性檢查
-- 處理統計資訊
-
-## 🚀 部署建議
-
-### 生產環境
-1. 使用 Gunicorn 或 uWSGI 作為 WSGI 服務器
-2. 配置 Nginx 作為反向代理
-3. 設置 SSL 證書
-4. 配置日誌輪轉
-5. 設置監控和告警
-
-### Docker 部署
-```dockerfile
-FROM python:3.9-slim
-RUN apt-get update && apt-get install -y ffmpeg
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "main.py"]
-```
-
-## 🧪 測試和驗證
-
-### 語音轉文字服務測試
-```bash
-# 測試語音轉文字服務配置和切換
-python test_speech_to_text.py
-```
-
-### 模塊測試
-```bash
-# 測試所有模塊功能
-python test_modules.py
-```
-
-### 服務切換指南
-
-#### 切換到 Deepgram (推薦)
-1. 設定環境變數：
-   ```env
-   SPEECH_TO_TEXT_PROVIDER=deepgram
-   DEEPGRAM_API_KEY=your_deepgram_api_key
-   ```
-2. 安裝依賴：`pip install deepgram-sdk>=4.0.0`
-3. 重啟服務
-
-#### 切換到 OpenAI Whisper
-1. 設定環境變數：
-   ```env
-   SPEECH_TO_TEXT_PROVIDER=openai
-   OPENAI_API_KEY=your_openai_api_key
-   ```
-2. 重啟服務
-
-### 服務狀態監控
-- **Web 首頁**: 顯示當前使用的語音轉文字服務
-- **健康檢查 API**: `/health` 端點提供詳細的服務狀態
-- **日誌監控**: 系統會記錄服務切換和性能指標
-
-## 📞 技術支援
+## 🔍 故障排除
 
 ### 常見問題
-1. **Deepgram API 金鑰獲取**: 訪問 [Deepgram 官網](https://deepgram.com/) 註冊並獲取 API 金鑰
-2. **成本控制**: 設定 Deepgram 的使用限額和告警
-3. **服務切換**: 無需停機，修改環境變數後重啟即可
 
-### 效能調優
-- **Deepgram 模型選擇**: `nova-2` (平衡) 或 `nova-3` (精度更高但稍貴)
-- **語言設定**: 設定正確的語言代碼可提高識別準確度
-- **並發設定**: 根據 API 配額調整 `MAX_WORKERS` 參數
+#### 1. 數據庫連接失敗
+```bash
+# 檢查數據庫狀態
+psql -h 192.168.31.247 -p 5444 -U root -d record
 
-## 🤝 貢獻
+# 確認防火牆設置
+telnet 192.168.31.247 5444
+```
 
-歡迎提交 Issue 和 Pull Request 來改進這個項目！
+#### 2. 音頻處理失敗
+```bash
+# 檢查依賴
+pip install pydub faster-whisper
+
+# 測試音頻處理
+python -c "from services.audio.processor import AudioProcessor; print('音頻處理正常')"
+```
+
+#### 3. JWT 錯誤
+```bash
+# 確認配置
+echo $JWT_SECRET_KEY
+
+# 檢查時間同步
+date
+```
+
+#### 4. 上傳失敗
+```bash
+# 檢查上傳目錄權限
+ls -la uploads/
+chmod 755 uploads/
+
+# 檢查文件大小限制
+echo $MAX_FILE_SIZE
+```
+
+### 日誌檢查
+```bash
+# 查看應用日誌
+tail -f app.log
+
+# 查看錯誤日誌
+grep ERROR app.log
+
+# 實時監控
+tail -f app.log | grep -E "(ERROR|WARN)"
+```
+
+## 📈 監控和維護
+
+### 健康檢查
+```bash
+# API 健康狀態
+curl http://localhost:5000/health
+
+# 詳細狀態
+curl http://localhost:5000/api/status
+```
+
+### 數據庫維護
+```bash
+# 備份數據庫
+pg_dump -h 192.168.31.247 -p 5444 -U root record > backup.sql
+
+# 清理舊記錄 (可選)
+python -c "
+from app import create_app
+from models import db, Recording
+from datetime import datetime, timedelta
+
+app = create_app()
+with app.app_context():
+    old_date = datetime.utcnow() - timedelta(days=90)
+    old_recordings = Recording.query.filter(Recording.created_at < old_date).all()
+    print(f'發現 {len(old_recordings)} 個舊記錄')
+"
+```
+
+## 🤝 開發說明
+
+### 項目結構
+```
+recordhelper/
+├── api/                 # API 路由
+├── models/              # 數據模型
+├── services/            # 業務邏輯
+├── app.py              # Flask 應用
+├── run.py              # 啟動腳本
+├── config.py           # 配置管理
+└── requirements.txt    # 依賴列表
+```
+
+### 添加新功能
+1. 在 `api/` 添加新的路由
+2. 在 `models/` 添加數據模型
+3. 在 `services/` 實現業務邏輯
+4. 更新數據庫遷移
+
+### API 測試
+```bash
+# 使用 curl 測試
+curl -X POST http://localhost:5000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","email":"test@example.com","password":"123456"}'
+
+# 使用 Postman 或其他 API 測試工具
+```
 
 ## 📄 授權
 
-MIT License
+MIT License - 自由使用和修改
+
+## 🆘 支援
+
+如有問題請檢查：
+1. 環境變數配置是否正確
+2. 數據庫連接是否正常  
+3. API 金鑰是否有效
+4. 日誌中的錯誤信息
 
 ---
 
-🤖 **Powered by OpenAI Whisper & Google Gemini AI** 
+🎉 **現在您擁有一個完整的錄音分析系統！** 支援 iOS App 和 LINE Bot，具備高性能的語音處理和 AI 分析能力。 

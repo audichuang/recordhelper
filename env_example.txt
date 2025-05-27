@@ -1,13 +1,27 @@
-# ⚡ Record Helper 配置檔案
+# ⚡ Record Helper 配置檔案 (API + LINE Bot)
 # 
-# 🚀 快速開始 (Mac M4 Pro 推薦配置):
+# 🚀 快速開始:
 # 1. 複製此檔案為 .env
-# 2. 填入您的 LINE Bot 和 Google API 金鑰
-# 3. 使用 faster_whisper 獲得最佳性能
+# 2. 填入您的數據庫連接信息
+# 3. 填入您的 API 金鑰
+# 4. 選擇語音轉文字服務
 #
-# 測試命令: python test_faster_whisper.py
 
-# 📱 LINE Bot 配置
+# 🗄️ 數據庫配置 (PostgreSQL)
+DB_HOST=192.168.31.247
+DB_PORT=5444
+DB_NAME=record
+DB_USER=root
+DB_PASSWORD=VZq9rWbC3oJYFYdDrjT6edewVHQEKNCBWPDnyqxKyzMTE3CoozBrWnYsi6KkpwKujcFKDytQCrxhTbcxsAB2vswcVgQc9ieYvtpP
+
+# 🔐 JWT認證配置
+JWT_SECRET_KEY=your-super-secret-jwt-key-change-in-production-please
+
+# 📁 文件上傳配置
+UPLOAD_FOLDER=uploads
+MAX_FILE_SIZE=104857600  # 100MB (bytes)
+
+# 📱 LINE Bot 配置 (可選 - 如不使用可留空)
 LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_頻道訪問令牌
 LINE_CHANNEL_SECRET=你的_LINE_頻道秘密
 
@@ -76,6 +90,17 @@ WEBHOOK_TIMEOUT=25
 FULL_ANALYSIS=true
 MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
 
+# 📡 Redis配置 (可選，用於Celery異步任務)
+# 如果不使用異步處理可以留空，系統會自動使用同步處理
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
+
+# 🚀 運行配置
+HOST=0.0.0.0
+PORT=5000
+DEBUG=true
+
 # 💰 服務比較 (Mac M4 Pro):
 # 
 # 🏆 Faster-Whisper (推薦):
@@ -107,4 +132,32 @@ MAX_SEGMENTS_FOR_FULL_ANALYSIS=50
 #   - 成本: 免費
 #   - 速度: 極慢 (194秒)
 #   - 準確性: 極高
-#   - 問題: MPS不相容 
+#   - 問題: MPS不相容
+
+# 📚 API端點說明:
+# 
+# 🔐 認證相關:
+#   POST /api/auth/register   - 用戶註冊
+#   POST /api/auth/login      - 用戶登入
+#   POST /api/auth/refresh    - 刷新令牌
+#   POST /api/auth/logout     - 用戶登出
+#
+# 👤 用戶相關:
+#   GET  /api/users/profile      - 獲取用戶資料
+#   PUT  /api/users/profile      - 更新用戶資料
+#   GET  /api/users/statistics   - 用戶統計信息
+#
+# 🎵 錄音相關:
+#   GET  /api/recordings         - 錄音列表
+#   POST /api/recordings/upload  - 上傳錄音
+#   GET  /api/recordings/{id}    - 錄音詳情
+#   PUT  /api/recordings/{id}    - 更新錄音
+#   DELETE /api/recordings/{id}  - 刪除錄音
+#
+# 📝 分析相關:
+#   GET  /api/recordings/{id}/analysis    - 分析結果
+#   POST /api/recordings/{id}/reanalyze   - 重新分析
+#
+# 🏥 健康檢查:
+#   GET  /health      - 服務健康狀態
+#   GET  /api/status  - API狀態詳情 
