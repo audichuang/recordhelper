@@ -11,6 +11,14 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 import os
 
+# 添加音頻處理庫
+try:
+    import av
+    HAS_AV = True
+except ImportError:
+    HAS_AV = False
+    logging.warning("⚠️ av庫未安裝，將無法計算音頻時長")
+
 from config import AppConfig
 from .whisper_async import AsyncWhisperService
 from .deepgram_async import AsyncDeepgramService
@@ -35,6 +43,41 @@ class AsyncSpeechToTextService:
         
         logger.info(f"🔧 語音轉文字服務初始化完成，使用提供商: {self.provider}")
     
+    async def get_audio_duration(self, audio_path: str) -> Optional[float]:
+        """
+        計算音頻文件時長
+        
+        Args:
+            audio_path: 音頻文件路徑
+            
+        Returns:
+            音頻時長（秒），如果無法計算則返回None
+        """
+        try:
+            if not HAS_AV:
+                logger.warning("⚠️ 無法計算音頻時長：av庫未安裝")
+                return None
+            
+            if not os.path.exists(audio_path):
+                logger.error(f"❌ 音頻文件不存在: {audio_path}")
+                return None
+            
+            # 使用av庫獲取音頻時長
+            with av.open(audio_path) as container:
+                if container.streams.audio:
+                    audio_stream = container.streams.audio[0]
+                    duration = float(container.duration) / av.time_base if container.duration else None
+                    if duration:
+                        logger.info(f"🕒 音頻時長: {duration:.2f}秒")
+                        return duration
+            
+            logger.warning(f"⚠️ 無法獲取音頻時長: {audio_path}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 計算音頻時長失敗: {str(e)}")
+            return None
+    
     async def transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
         """
         使用指定服務轉錄音頻
@@ -51,6 +94,9 @@ class AsyncSpeechToTextService:
             
             logger.info(f"🎙️ 開始轉錄音頻: {audio_path}")
             
+            # 計算音頻時長
+            audio_duration = await self.get_audio_duration(audio_path)
+            
             # 根據配置選擇服務
             if self.provider == "openai":
                 result = await self.whisper_service.transcribe(audio_path)
@@ -62,6 +108,14 @@ class AsyncSpeechToTextService:
                 result = await self.gemini_audio_service.transcribe(audio_path)
             else:
                 raise ValueError(f"不支持的轉錄服務: {self.provider}")
+            
+            # 確保結果包含時長信息
+            if 'duration' not in result or result['duration'] is None:
+                if audio_duration is not None:
+                    result['duration'] = audio_duration
+                    logger.info(f"📊 使用計算得到的音頻時長: {audio_duration:.2f}秒")
+                else:
+                    logger.warning("⚠️ 無法獲取音頻時長信息")
             
             logger.info(f"✅ 音頻轉錄完成: {audio_path}")
             return result
