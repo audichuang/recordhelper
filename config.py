@@ -159,7 +159,7 @@ class AppConfig:
             local_whisper_task=os.getenv("LOCAL_WHISPER_TASK", "transcribe"),
             local_whisper_device=os.getenv("LOCAL_WHISPER_DEVICE", "auto"),
             gemini_model=os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-preview-05-20"),
-            thinking_budget=int(os.getenv("THINKING_BUDGET", "256")),
+            thinking_budget=int(os.getenv("THINKING_BUDGET", "1024")),
             max_retries=int(os.getenv("MAX_RETRIES", "2")),
             max_workers=int(os.getenv("MAX_WORKERS", "4")),
             webhook_timeout=int(os.getenv("WEBHOOK_TIMEOUT", "25")),

@@ -14,6 +14,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 import uvicorn
+import coloredlogs
 
 from config import AppConfig
 from models import init_async_db, close_async_db, get_async_db_session
@@ -21,15 +22,47 @@ from api_fastapi import init_api_routes
 from services.messaging.line_bot_fastapi import LineWebhookHandler
 
 
-# 設置日誌
-logging.basicConfig(
+# 設置彩色日誌
+# 設定自定義日誌格式
+LOG_FORMAT = '%(asctime)s [%(hostname)s] %(levelname)s %(name)s - %(message)s'
+
+# 設定不同級別的樣式
+LEVEL_STYLES = {
+    'debug': {'color': 'blue', 'bold': False},
+    'info': {'color': 'green', 'bold': False},
+    'warning': {'color': 'yellow', 'bold': True},
+    'error': {'color': 'red', 'bold': True},
+    'critical': {'color': 'magenta', 'bold': True, 'background': 'red'}
+}
+
+# 設定日誌欄位樣式
+FIELD_STYLES = {
+    'asctime': {'color': 'white'},
+    'hostname': {'color': 'magenta', 'bold': True},
+    'levelname': {'color': 'white', 'bold': True},
+    'name': {'color': 'cyan', 'bold': False},
+    'message': {'color': 'white'}
+}
+
+# 設置和安裝彩色日誌
+coloredlogs.install(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('linebot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    fmt=LOG_FORMAT,
+    level_styles=LEVEL_STYLES,
+    field_styles=FIELD_STYLES,
+    isatty=True
 )
+
+# 添加文件處理器
+file_handler = logging.FileHandler('linebot.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# 獲取根記錄器並添加文件處理器
+root_logger = logging.getLogger()
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,22 +75,22 @@ async def lifespan(app: FastAPI):
     # 初始化資料庫
     try:
         await init_database(app.state.config)
-        logger.info("資料庫初始化完成")
+        logger.info("💾 資料庫初始化完成")
     except Exception as e:
-        logger.error(f"資料庫初始化失敗: {e}")
+        logger.error(f"❌ 資料庫初始化失敗: {e}")
         raise
     
     yield
     
     # 關閉時執行
-    logger.info("關閉FastAPI錄音助手")
+    logger.info("👋 關閉FastAPI錄音助手")
     
     # 關閉資料庫連接
     try:
         await close_async_db()
-        logger.info("資料庫連接已關閉")
+        logger.info("💾 資料庫連接已關閉")
     except Exception as e:
-        logger.error(f"關閉資料庫連接時發生錯誤: {e}")
+        logger.error(f"❌ 關閉資料庫連接時發生錯誤: {e}")
 
 
 def create_app(config: AppConfig = None) -> FastAPI:
@@ -88,7 +121,7 @@ def create_app(config: AppConfig = None) -> FastAPI:
     if config.line_channel_access_token and config.line_channel_secret:
         webhook_handler = LineWebhookHandler(config)
         setup_line_webhook(app, webhook_handler)
-        logger.info("LINE Bot webhook已啟用")
+        logger.info("📱 LINE Bot webhook已啟用")
     
     # 添加健康檢查端點
     setup_health_routes(app)
@@ -96,7 +129,7 @@ def create_app(config: AppConfig = None) -> FastAPI:
     # 添加錯誤處理器
     setup_error_handlers(app)
     
-    logger.info("FastAPI應用初始化完成")
+    logger.info("✅ FastAPI應用初始化完成")
     return app
 
 
@@ -161,7 +194,7 @@ def setup_line_webhook(app: FastAPI, webhook_handler: LineWebhookHandler):
             return {"status": "ok"}
             
         except Exception as e:
-            logger.error(f"LINE webhook處理錯誤: {str(e)}")
+            logger.error(f"❌ LINE webhook處理錯誤: {str(e)}")
             raise HTTPException(status_code=500, detail="Webhook處理失敗")
     
     @app.post("/webhook/line")
@@ -183,7 +216,7 @@ def setup_error_handlers(app: FastAPI):
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """通用異常處理器"""
-        logger.error(f"未處理的異常: {str(exc)}")
+        logger.error(f"❗ 未處理的異常: {str(exc)}")
         return JSONResponse(
             status_code=500,
             content={"message": "內部伺服器錯誤", "status_code": 500}
@@ -195,10 +228,10 @@ async def init_database(config: AppConfig):
     try:
         # 使用新的異步資料庫初始化函數
         await init_async_db(config.database_url)
-        logger.info(f"異步資料庫連接已初始化 ({config.database_url})")
+        logger.info(f"🔌 異步資料庫連接已初始化 ({config.database_url})")
         
     except Exception as e:
-        logger.error(f"資料庫初始化失敗: {e}")
+        logger.error(f"❌ 數據庫初始化失敗: {str(e)}")
         raise
 
 

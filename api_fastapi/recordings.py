@@ -109,7 +109,7 @@ async def upload_recording(
             file_path
         )
         
-        logger.info(f"錄音上傳成功: {recording.id}, 用戶: {current_user.id}")
+        logger.info(f"📤 錄音上傳成功: {recording.id}, 用戶: {current_user.id}")
         
         return UploadResponse(
             message="錄音上傳成功，正在處理中...",
@@ -120,7 +120,7 @@ async def upload_recording(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"上傳錄音錯誤: {str(e)}")
+        logger.error(f"❌ 上傳錄音錯誤: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="上傳失敗"
@@ -319,7 +319,7 @@ async def process_recording_async(recording_id: str, file_path: str):
             recording = result.scalars().first()
             
             if not recording:
-                logger.error(f"找不到錄音: {recording_id}")
+                logger.error(f"❓ 找不到錄音: {recording_id}")
                 return
             
             recording.status = RecordingStatus.PROCESSING
@@ -330,15 +330,19 @@ async def process_recording_async(recording_id: str, file_path: str):
         ai_service = AsyncGeminiService(config)
         
         # 語音轉文字
-        logger.info(f"開始處理錄音 {recording_id} 的語音轉文字")
-        result = await stt_service.transcribe_audio(file_path)
+        logger.info(f"🎙️ 開始處理錄音 {recording_id} 的語音轉文字")
+        try:
+            result = await stt_service.transcribe_audio(file_path)
+        except Exception as e:
+            logger.error(f"❌ 語音轉文字呼叫失敗: {str(e)}")
+            raise
         
         # 從結果字典中提取文字和時長
         transcript = result.get('transcript')
         duration = result.get('duration')
         
         if not transcript:
-            logger.error(f"語音轉文字失敗: {recording_id}")
+            logger.error(f"❌ 語音轉文字失敗: {recording_id}")
             async with async_session() as session:
                 result = await session.execute(
                     select(Recording).where(Recording.id == uuid.UUID(recording_id))
@@ -349,8 +353,12 @@ async def process_recording_async(recording_id: str, file_path: str):
             return
         
         # 生成摘要
-        logger.info(f"開始為錄音 {recording_id} 生成摘要")
-        summary = await ai_service.generate_summary(transcript)
+        logger.info(f"📝 開始為錄音 {recording_id} 生成摘要")
+        try:
+            summary = await ai_service.generate_summary(transcript)
+        except Exception as e:
+            logger.error(f"❌ 摘要生成失敗: {str(e)}")
+            summary = "摘要生成失敗，但錄音轉文字成功。請查看逐字稿。"
         
         # 更新數據庫
         async with async_session() as session:
@@ -386,10 +394,10 @@ async def process_recording_async(recording_id: str, file_path: str):
             
             await session.commit()
         
-        logger.info(f"錄音 {recording_id} 處理完成")
+        logger.info(f"✅ 錄音 {recording_id} 處理完成")
         
     except Exception as e:
-        logger.error(f"處理錄音時發生錯誤: {e}")
+        logger.error(f"❌ 處理錄音時發生錯誤: {e}")
         # 更新錄音狀態為失敗
         try:
             async with async_session() as session:
@@ -401,7 +409,7 @@ async def process_recording_async(recording_id: str, file_path: str):
                     recording.status = RecordingStatus.FAILED
                     await session.commit()
         except Exception as e2:
-            logger.error(f"更新錄音狀態為失敗時發生錯誤: {e2}")
+            logger.error(f"❌ 更新錄音狀態為失敗時發生錯誤: {e2}")
     finally:
         await engine.dispose()
 
