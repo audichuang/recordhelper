@@ -433,7 +433,7 @@ async def process_recording_async(recording_id: str):
             raise
         
         # 從結果字典中提取文字和時長
-        transcript = result.get('transcript')
+        transcript = result.get('text')
         duration = result.get('duration')
         
         if not transcript:

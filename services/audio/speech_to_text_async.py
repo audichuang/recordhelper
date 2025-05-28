@@ -6,7 +6,6 @@
 import logging
 import asyncio
 import aiofiles
-import aiohttp
 from typing import Dict, Any, Optional
 from pathlib import Path
 import os
@@ -151,7 +150,7 @@ class AsyncSpeechToTextService:
                     else:
                         logger.warning("⚠️ 無法獲取音頻時長信息")
                 
-                logger.info(f"✅ 音頻數據轉錄完成，轉錄文本長度: {len(result.get('transcript', result.get('text', '')))}")
+                logger.info(f"✅ 音頻數據轉錄完成，轉錄文本長度: {len(result.get('transcript') or result.get('text') or '')}")
                 return result
                 
             finally:
@@ -321,138 +320,12 @@ class AsyncSpeechToTextService:
         raise Exception(f"所有轉錄服務都失敗，最後錯誤: {str(last_error)}")
     
     async def _transcribe_with_gemini_no_fallback(self, file_path: str) -> Dict[str, Any]:
-        """使用 Gemini Audio 轉錄，但不自動嘗試本地備用"""
-        # 這個方法會直接調用 Gemini 服務，但不觸發內建的本地備用邏輯
-        try:
-            # 讀取文件
-            async with aiofiles.open(file_path, 'rb') as audio_file:
-                audio_data = await audio_file.read()
-            
-            # 重新實現簡化的 Gemini 轉錄邏輯
-            api_key = self.gemini_audio_service._get_api_key()
-            
-            # 檢查文件大小
-            file_size = os.path.getsize(file_path)
-            file_size_mb = file_size / (1024 * 1024)
-            
-            if file_size_mb > 100:
-                raise ValueError(f"文件太大: {file_size_mb:.1f}MB，Gemini最大支援100MB")
-            
-            # 構建API請求
-            import base64
-            import aiohttp
-            from pathlib import Path
-            
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            
-            # 確定文件MIME類型
-            file_ext = Path(file_path).suffix.lower()
-            mime_type = 'audio/wav'
-            if file_ext == '.mp3':
-                mime_type = 'audio/mpeg'
-            elif file_ext == '.m4a':
-                mime_type = 'audio/mp4'
-            elif file_ext == '.ogg':
-                mime_type = 'audio/ogg'
-            elif file_ext == '.flac':
-                mime_type = 'audio/flac'
-            
-            url = f"{self.gemini_audio_service.base_url}/models/{self.gemini_audio_service.model}:generateContent?key={api_key}"
-            
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": audio_base64
-                                }
-                            },
-                            {
-                                "text": "將這段音頻轉錄為文字。請使用原始語言，不要翻譯。"
-                            }
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": 0.2,
-                    "topP": 0.95,
-                    "topK": 40
-                }
-            }
-            
-            headers = {'Content-Type': 'application/json'}
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=300)
-                ) as response:
-                    
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"Gemini API錯誤 {response.status}: {error_text}")
-                    
-                    result = await response.json()
-            
-            # 解析結果
-            if 'candidates' not in result or not result['candidates']:
-                raise Exception("Gemini API返回無效結果")
-            
-            candidate = result['candidates'][0]
-            if 'content' not in candidate or 'parts' not in candidate['content']:
-                raise Exception("Gemini API返回無效內容結構")
-            
-            transcript = ""
-            for part in candidate['content']['parts']:
-                if 'text' in part:
-                    transcript += part['text']
-            
-            if not transcript.strip():
-                raise Exception("轉錄結果為空")
-            
-            return {
-                'transcript': transcript.strip(),
-                'language': 'zh',
-                'provider': 'gemini_audio',
-                'model': self.gemini_audio_service.model,
-                'file_size_mb': file_size_mb
-            }
-            
-        except Exception as e:
-            logger.error(f"Gemini 直接轉錄失敗: {str(e)}")
-            raise
+        """使用 Gemini Audio SDK 轉錄，但不自動嘗試本地備用"""
+        return await self.gemini_audio_service.transcribe(file_path)
     
     async def _transcribe_with_gemini_key_rotation(self, file_path: str) -> Dict[str, Any]:
         """嘗試輪換 Gemini API keys"""
-        if not hasattr(self.gemini_audio_service, 'api_keys') or len(self.gemini_audio_service.api_keys) <= 1:
-            raise Exception("沒有額外的 Gemini API keys 可供輪換")
-        
-        # 嘗試其他的 API keys
-        for i, api_key in enumerate(self.gemini_audio_service.api_keys):
-            try:
-                logger.info(f"🔑 嘗試 Gemini API key #{i+1}")
-                
-                # 暫時替換 API key
-                original_get_api_key = self.gemini_audio_service._get_api_key
-                self.gemini_audio_service._get_api_key = lambda: api_key
-                
-                try:
-                    result = await self._transcribe_with_gemini_no_fallback(file_path)
-                    logger.info(f"✅ Gemini API key #{i+1} 成功")
-                    return result
-                finally:
-                    # 恢復原始方法
-                    self.gemini_audio_service._get_api_key = original_get_api_key
-                    
-            except Exception as e:
-                logger.warning(f"⚠️ Gemini API key #{i+1} 失敗: {str(e)}")
-                continue
-        
-        raise Exception("所有 Gemini API keys 都失敗")
+        return await self.gemini_audio_service.transcribe_with_key_rotation(file_path)
     
     async def _transcribe_with_openai(self, file_path: str) -> Dict[str, Any]:
         """使用OpenAI Whisper轉錄"""
