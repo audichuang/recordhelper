@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 from sqlalchemy import desc
 from sqlalchemy.sql import func
 
-from models import User, Recording, AnalysisResult, get_async_db_session, RecordingStatus
+from models import User, Recording, AnalysisResult, get_async_db_session, RecordingStatus, AnalysisHistory
 from .auth import get_current_user
 from services.audio.speech_to_text_async import AsyncSpeechToTextService
 from services.ai.gemini_async import AsyncGeminiService
@@ -63,6 +63,10 @@ class RecordingSummaryList(BaseModel):
     total: int
     page: int
     per_page: int
+
+class UpdateTitleRequest(BaseModel):
+    """更新標題請求"""
+    title: str
 
 class UploadResponse(BaseModel):
     message: str
@@ -305,8 +309,8 @@ async def get_recording(
                 detail="錄音不存在"
             )
         
-        # 檢查權限
-        if recording.user_id != current_user.id:
+        # 檢查權限 - 使用字串比較
+        if str(recording.user_id) != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="沒有權限訪問此錄音"
@@ -356,6 +360,59 @@ async def get_recording(
         )
 
 
+@recordings_router.put("/{recording_id}/title")
+async def update_recording_title(
+    recording_id: str,
+    request: UpdateTitleRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """更新錄音標題"""
+    try:
+        # 驗證標題不為空
+        if not request.title or not request.title.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="標題不能為空"
+            )
+        
+        result = await db.execute(
+            select(Recording).where(Recording.id == uuid.UUID(recording_id))
+        )
+        recording = result.scalars().first()
+        
+        if not recording:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="錄音不存在"
+            )
+        
+        # 檢查權限 - 使用字串比較
+        if str(recording.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="沒有權限修改此錄音"
+            )
+        
+        # 更新標題
+        recording.title = request.title.strip()
+        await db.commit()
+        await db.refresh(recording)
+        
+        logger.info(f"✏️ 更新錄音標題: {recording_id} -> {request.title}")
+        
+        return {"message": "標題更新成功", "title": recording.title}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新錄音標題錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新標題失敗"
+        )
+
+
 @recordings_router.delete("/{recording_id}")
 async def delete_recording(
     recording_id: str,
@@ -375,28 +432,45 @@ async def delete_recording(
                 detail="錄音不存在"
             )
         
-        # 檢查權限
-        if recording.user_id != current_user.id:
+        # 檢查權限 - 使用字串比較以避免 UUID 比較問題
+        logger.info(f"🔍 權限檢查 - 錄音用戶ID: {recording.user_id}, 當前用戶ID: {current_user.id}")
+        logger.info(f"🔍 錄音用戶ID類型: {type(recording.user_id)}, 當前用戶ID類型: {type(current_user.id)}")
+        logger.info(f"🔍 錄音用戶ID字串: {str(recording.user_id)}, 當前用戶ID字串: {str(current_user.id)}")
+        
+        # 轉換為字串進行比較
+        if str(recording.user_id) != str(current_user.id):
+            logger.error(f"❌ 權限檢查失敗 - 錄音屬於用戶 {recording.user_id}, 但當前用戶是 {current_user.id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="沒有權限刪除此錄音"
             )
         
         # 音頻數據現在存儲在DB中，不需要刪除文件
-        logger.info(f"🗑️ 刪除錄音 {recording_id}，數據存儲在DB中")
+        logger.info(f"🗑️ 開始刪除錄音 {recording_id} 及相關資料")
         
-        # 刪除相關的分析結果
+        # 1. 刪除相關的分析歷史記錄
+        history_result = await db.execute(
+            select(AnalysisHistory).where(AnalysisHistory.recording_id == recording.id)
+        )
+        histories = history_result.scalars().all()
+        for history in histories:
+            await db.delete(history)
+            logger.info(f"  - 刪除分析歷史記錄: {history.id}")
+        
+        # 2. 刪除相關的分析結果
         analysis_result = await db.execute(
             select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
         )
         analysis = analysis_result.scalars().first()
         if analysis:
             await db.delete(analysis)
+            logger.info(f"  - 刪除分析結果: {analysis.id}")
         
-        # 刪除錄音（連同音頻數據）
+        # 3. 刪除錄音（連同音頻數據）
         await db.delete(recording)
         await db.commit()
         
+        logger.info(f"✅ 成功刪除錄音 {recording_id} 及所有相關資料")
         return {"message": "錄音刪除成功"}
         
     except HTTPException:
@@ -546,8 +620,8 @@ async def reprocess_recording(
                 detail="錄音不存在"
             )
         
-        # 檢查權限
-        if recording.user_id != current_user.id:
+        # 檢查權限 - 使用字串比較
+        if str(recording.user_id) != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="沒有權限處理此錄音"
@@ -590,8 +664,8 @@ async def download_recording(
                 detail="錄音不存在"
             )
         
-        # 檢查權限
-        if recording.user_id != current_user.id:
+        # 檢查權限 - 使用字串比較
+        if str(recording.user_id) != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="沒有權限下載此錄音"
