@@ -58,13 +58,13 @@ class AsyncGeminiService:
             estimated_minutes = text_length / 180
             
             # 根據文本長度選擇不同的處理策略
-            if text_length <= 1500:
+            if text_length <= 3000:
                 # 短錄音（<10分鐘）：完整摘要
                 summary = await self._generate_complete_summary(transcript)
-            elif text_length <= 5000:
+            elif text_length <= 6000:
                 # 中等錄音（10-30分鐘）：重點摘要
                 summary = await self._generate_focused_summary(transcript)
-            elif text_length <= 15000:
+            elif text_length <= 18000:
                 # 長錄音（30分鐘-1.5小時）：結構化摘要
                 summary = await self._generate_structured_summary(transcript)
             else:
