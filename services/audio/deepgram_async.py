@@ -59,7 +59,8 @@ class AsyncDeepgramService:
                 'language': self.language,
                 'punctuate': 'true',
                 'utterances': 'true',
-                'diarize': 'true'
+                'diarize': 'true',
+                'smart_format': 'true'
             }
             
             # 準備請求頭
@@ -99,14 +100,22 @@ class AsyncDeepgramService:
             if not transcript:
                 raise Exception("轉錄結果為空")
             
+            # 提取時間軸資訊
+            utterances = result['results'].get('utterances', [])
+            
+            # 格式化時間軸文本（類似 Gemini 的格式）
+            timeline_transcript = self._format_timeline_transcript(utterances)
+            
             # 格式化返回結果
             return {
                 'transcript': transcript,
+                'transcription': transcript,  # 為了相容性
+                'timeline_transcript': timeline_transcript,
                 'language': self.language,
                 'confidence': alternative.get('confidence', 0),
-                'words': alternative.get('words', []),
                 'provider': 'deepgram',
-                'model': self.model
+                'model': self.model,
+                'has_timeline': True
             }
             
         except Exception as e:
@@ -152,4 +161,67 @@ class AsyncDeepgramService:
             return {
                 "available": False,
                 "error": str(e)
-            } 
+            }
+    
+    def _format_timeline_transcript(self, utterances: list) -> str:
+        """
+        將 Deepgram 的 words 數據格式化為帶時間軸的逐字稿
+        
+        Args:
+            words: Deepgram 返回的 words 陣列
+            
+        Returns:
+            格式化的時間軸逐字稿
+        """
+        if not utterances:
+            return ""
+        
+        timeline_parts = []
+        current_sentence = []
+        sentence_start_time = None
+        
+        for i, word_data in enumerate(utterances):
+            word = word_data.get('transcript', '')
+            start_time = word_data.get('start', 0)
+            end_time = word_data.get('end', 0)
+            
+            # 記錄句子開始時間
+            if sentence_start_time is None:
+                sentence_start_time = start_time
+            
+            current_sentence.append(word)
+            
+            # 檢查是否為句子結尾（標點符號或最後一個詞）
+            is_sentence_end = (
+                word.endswith(('。', '！', '？', '.', '!', '?')) or
+                i == len(utterances) - 1
+            )
+            
+            if is_sentence_end:
+                # 格式化時間戳
+                start_timestamp = self._format_timestamp(sentence_start_time)
+                end_timestamp = self._format_timestamp(end_time)
+                
+                # 組合句子
+                sentence_text = ' '.join(current_sentence)
+                timeline_parts.append(f"[{start_timestamp} - {end_timestamp}] {sentence_text}")
+                
+                # 重置
+                current_sentence = []
+                sentence_start_time = None
+        
+        return '\n'.join(timeline_parts)
+    
+    def _format_timestamp(self, seconds: float) -> str:
+        """
+        將秒數格式化為時間戳格式 (MM:SS)
+        
+        Args:
+            seconds: 秒數
+            
+        Returns:
+            格式化的時間戳
+        """
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes:02d}:{secs:02d}" 

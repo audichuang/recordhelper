@@ -47,6 +47,9 @@ class RecordingResponse(BaseModel):
     original_filename: str
     format: str
     mime_type: str
+    timeline_transcript: Optional[str] = None
+    has_timeline: bool = False
+    analysis_metadata: Optional[dict] = None
 
 class RecordingList(BaseModel):
     recordings: List[RecordingResponse]
@@ -315,6 +318,17 @@ async def get_recording(
         )
         analysis = analysis_result.scalars().first()
         
+        # 從分析元數據中提取時間軸資訊
+        timeline_transcript = None
+        has_timeline = False
+        analysis_metadata = None
+        
+        if analysis and analysis.analysis_metadata:
+            analysis_metadata = analysis.analysis_metadata
+            has_timeline = analysis_metadata.get("has_timeline", False)
+            if has_timeline:
+                timeline_transcript = analysis_metadata.get("timeline_transcript", None)
+        
         return RecordingResponse(
             id=str(recording.id),
             title=recording.title,
@@ -326,7 +340,10 @@ async def get_recording(
             summary=analysis.summary if analysis else None,
             original_filename=recording.original_filename,
             format=recording.format,
-            mime_type=recording.mime_type
+            mime_type=recording.mime_type,
+            timeline_transcript=timeline_transcript,
+            has_timeline=has_timeline,
+            analysis_metadata=analysis_metadata
         )
         
     except HTTPException:
@@ -433,7 +450,7 @@ async def process_recording_async(recording_id: str):
             raise
         
         # 從結果字典中提取文字和時長
-        transcript = result.get('text')
+        transcript = result.get('transcript') or result.get('transcription') or result.get('text')
         duration = result.get('duration')
         
         if not transcript:

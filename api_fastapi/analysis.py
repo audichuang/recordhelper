@@ -382,7 +382,15 @@ async def process_transcription(history_id: str, audio_data: bytes, provider: st
                 history.content = transcription_result.get("transcription", "")
                 history.confidence_score = transcription_result.get("confidence")
                 history.processing_time = transcription_result.get("processing_time")
-                history.analysis_metadata = transcription_result.get("metadata", {})
+                
+                # 儲存時間軸資訊到 metadata
+                metadata = transcription_result.get("metadata", {})
+                if transcription_result.get("has_timeline"):
+                    metadata["has_timeline"] = True
+                    metadata["timeline_transcript"] = transcription_result.get("timeline_transcript", "")
+                    metadata["words"] = transcription_result.get("words", [])
+                
+                history.analysis_metadata = metadata
                 history.mark_as_completed()
                 
                 # 記錄內容長度以確認有收到轉錄結果

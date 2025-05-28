@@ -254,11 +254,9 @@ class AsyncSpeechToTextService:
         使用智能備用方案轉錄音頻
         
         備用順序：
-        1. 主要服務 (根據配置)
-        2. 如果是 Gemini，嘗試輪換不同的 API key
-        3. Deepgram (如果配置了)
-        4. OpenAI Whisper (如果配置了)
-        5. 本地 Whisper (最後選項)
+        1. 主要服務 (根據配置 - deepgram 或 gemini_audio)
+        2. 如果主要服務失敗，嘗試另一個服務 (deepgram <-> gemini_audio)
+        3. OpenAI Whisper (最後備用方案)
         """
         last_error = None
         
@@ -268,7 +266,9 @@ class AsyncSpeechToTextService:
             if self.provider == "openai":
                 result = await self.whisper_service.transcribe(file_path)
             elif self.provider == "whisper_local":
-                result = await self.local_whisper_service.transcribe(file_path)
+                # 如果配置是本地，直接使用 deepgram 替代
+                logger.info("🔄 本地 Whisper 已棄用，改用 Deepgram")
+                result = await self.deepgram_service.transcribe(file_path)
             elif self.provider == "deepgram":
                 result = await self.deepgram_service.transcribe(file_path)
             elif self.provider == "gemini_audio":
@@ -283,52 +283,46 @@ class AsyncSpeechToTextService:
             last_error = e
             logger.warning(f"⚠️ 主要服務 {self.provider} 失敗: {str(e)}")
         
-        # 2. 如果主要服務是 Gemini 且失敗了，嘗試輪換 API keys
-        if self.provider == "gemini_audio":
-            try:
-                logger.info("🔄 嘗試 Gemini API key 輪換")
-                result = await self._transcribe_with_gemini_key_rotation(file_path)
-                logger.info("✅ Gemini API key 輪換成功")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ Gemini API key 輪換失敗: {str(e)}")
+        # 2. 嘗試備用服務 (Deepgram <-> Gemini Audio 互為備用)
+        if self.provider == "deepgram":
+            # 如果 Deepgram 失敗，嘗試 Gemini
+            if self.gemini_audio_service and hasattr(self.gemini_audio_service, 'api_keys') and self.gemini_audio_service.api_keys:
+                try:
+                    logger.info("🔄 嘗試備用服務: Gemini Audio")
+                    # Gemini 會自動進行 API key 負載均衡
+                    result = await self.gemini_audio_service.transcribe(file_path)
+                    result['backup_provider'] = 'gemini_audio'
+                    logger.info("✅ Gemini Audio 備用轉錄成功")
+                    return result
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"⚠️ Gemini Audio 備用服務失敗: {str(e)}")
+                    
+        elif self.provider == "gemini_audio":
+            # 如果 Gemini 失敗，嘗試 Deepgram
+            if self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
+                try:
+                    logger.info("🔄 嘗試備用服務: Deepgram")
+                    # Deepgram 會自動進行 API key 負載均衡
+                    result = await self.deepgram_service.transcribe(file_path)
+                    result['backup_provider'] = 'deepgram'
+                    logger.info("✅ Deepgram 備用轉錄成功")
+                    return result
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"⚠️ Deepgram 備用服務失敗: {str(e)}")
         
-        # 3. 嘗試 Deepgram (如果不是主要服務且已配置)
-        if self.provider != "deepgram" and self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
-            try:
-                logger.info("🔄 嘗試備用服務: Deepgram")
-                result = await self.deepgram_service.transcribe(file_path)
-                result['backup_provider'] = 'deepgram'
-                logger.info("✅ Deepgram 備用轉錄成功")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ Deepgram 備用服務失敗: {str(e)}")
-        
-        # 4. 嘗試 OpenAI Whisper (如果不是主要服務且已配置)
+        # 3. 最後嘗試 OpenAI Whisper
         if self.provider != "openai" and self.whisper_service and hasattr(self.whisper_service, 'api_key') and self.whisper_service.api_key:
             try:
-                logger.info("🔄 嘗試備用服務: OpenAI Whisper")
+                logger.info("🔄 嘗試最後備用: OpenAI Whisper")
                 result = await self.whisper_service.transcribe(file_path)
                 result['backup_provider'] = 'openai_whisper'
                 logger.info("✅ OpenAI Whisper 備用轉錄成功")
                 return result
             except Exception as e:
                 last_error = e
-                logger.warning(f"⚠️ OpenAI Whisper 備用服務失敗: {str(e)}")
-        
-        # 5. 最後嘗試本地 Whisper (僅在所有雲端服務都失敗時)
-        if self.provider != "whisper_local":
-            try:
-                logger.info("🔄 嘗試最後備用: 本地 Whisper")
-                result = await self.local_whisper_service.transcribe(file_path)
-                result['backup_provider'] = 'local_whisper'
-                logger.info("✅ 本地 Whisper 備用轉錄成功")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.error(f"❌ 本地 Whisper 備用服務也失敗: {str(e)}")
+                logger.warning(f"⚠️ OpenAI Whisper 備用服務也失敗: {str(e)}")
         
         # 所有服務都失敗
         raise Exception(f"所有轉錄服務都失敗，最後錯誤: {str(last_error)}")
