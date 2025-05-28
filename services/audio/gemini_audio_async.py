@@ -157,22 +157,7 @@ class AsyncGeminiAudioService:
             
         except Exception as e:
             logger.error(f"Gemini Audio轉錄失敗: {str(e)}")
-            # 如果API調用失敗，使用備用的本地處理
-            try:
-                from .local_whisper_async import AsyncLocalWhisperService
-                logger.info("嘗試使用本地Whisper作為備用")
-                
-                local_service = AsyncLocalWhisperService(self.config)
-                result = await local_service.transcribe(file_path)
-                
-                # 標記為備用結果
-                result['provider'] = 'local_whisper_backup'
-                result['note'] = 'Gemini失敗後的備用結果'
-                
-                return result
-            except Exception as backup_error:
-                logger.error(f"備用轉錄也失敗: {str(backup_error)}")
-                raise Exception(f"Gemini Audio轉錄失敗，備用方法也失敗: {str(e)}")
+            raise
     
     async def check_status(self) -> Dict[str, Any]:
         """檢查服務狀態"""

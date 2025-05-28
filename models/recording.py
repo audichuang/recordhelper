@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from sqlalchemy import Column, String, BigInteger, Float, ForeignKey, Enum as SQLEnum, DateTime
+from sqlalchemy import Column, String, BigInteger, Float, ForeignKey, Enum as SQLEnum, DateTime, LargeBinary
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSON
 
@@ -24,10 +24,11 @@ class Recording(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    audio_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)  # bytes
     duration: Mapped[float | None] = mapped_column(Float, nullable=True)  # seconds
     format: Mapped[str] = mapped_column(String(10), nullable=False)  # mp3, wav, etc.
+    mime_type: Mapped[str] = mapped_column(String(50), nullable=False)  # audio/mp3, audio/wav, etc.
     status: Mapped[RecordingStatus] = mapped_column(SQLEnum(RecordingStatus, native_enum=False, length=50), default=RecordingStatus.UPLOADING, nullable=False)
     recording_metadata: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -37,14 +38,15 @@ class Recording(Base):
     user: Mapped["User"] = relationship("User", back_populates="recordings", lazy="selectin")
     analysis_result: Mapped["AnalysisResult | None"] = relationship("AnalysisResult", back_populates="recording", uselist=False, cascade="all, delete-orphan", lazy="selectin")
     
-    def __init__(self, user_id: uuid.UUID, title: str, original_filename: str, file_path: str, file_size: int, format_str: str, **kwargs):
+    def __init__(self, user_id: uuid.UUID, title: str, original_filename: str, audio_data: bytes, file_size: int, format_str: str, mime_type: str, **kwargs):
         super().__init__(**kwargs)
         self.user_id = user_id
         self.title = title
         self.original_filename = original_filename
-        self.file_path = file_path
+        self.audio_data = audio_data
         self.file_size = file_size
         self.format = format_str.lower()
+        self.mime_type = mime_type
         self.status = RecordingStatus.UPLOADING
         
     def update_status(self, status: RecordingStatus):
@@ -72,7 +74,7 @@ class Recording(Base):
         """檢查是否已有分析結果"""
         return self.analysis_result is not None
         
-    def to_dict(self, include_analysis: bool = False) -> dict:
+    def to_dict(self, include_analysis: bool = False, include_audio_data: bool = False) -> dict:
         """轉換為字典"""
         result = {
             'id': str(self.id),
@@ -84,12 +86,16 @@ class Recording(Base):
             'duration': self.duration,
             'formatted_duration': self.get_formatted_duration(),
             'format': self.format,
+            'mime_type': self.mime_type,
             'status': self.status.value if self.status else None,
             'metadata': self.recording_metadata if self.recording_metadata else {},
             'has_analysis': self.has_analysis(),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+        
+        if include_audio_data:
+            result['audio_data'] = self.audio_data
         
         if include_analysis and self.analysis_result:
             result['analysis'] = self.analysis_result.to_dict()

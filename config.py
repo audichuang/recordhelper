@@ -76,12 +76,12 @@ class AppConfig:
         line_channel_access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
         line_channel_secret = os.getenv("LINE_CHANNEL_SECRET", "")
         
-        # 數據庫配置
-        db_host = os.getenv("DB_HOST", "192.168.31.247")
-        db_port = int(os.getenv("DB_PORT", "5444"))
-        db_name = os.getenv("DB_NAME", "record")
-        db_user = os.getenv("DB_USER", "root")
-        db_password = os.getenv("DB_PASSWORD", "VZq9rWbC3oJYFYdDrjT6edewVHQEKNCBWPDnyqxKyzMTE3CoozBrWnYsi6KkpwKujcFKDytQCrxhTbcxsAB2vswcVgQc9ieYvtpP")
+        # 數據庫配置 (本地 PostgreSQL)
+        db_host = os.getenv("DB_HOST", "localhost")
+        db_port = int(os.getenv("DB_PORT", "5432"))
+        db_name = os.getenv("DB_NAME", "recordhelper")
+        db_user = os.getenv("DB_USER", "recorduser")
+        db_password = os.getenv("DB_PASSWORD", "recordpass123")
         
         # 更新為異步驅動
         database_url = f"postgresql+asyncpg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"

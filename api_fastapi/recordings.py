@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
@@ -38,13 +38,15 @@ class RecordingSummary(BaseModel):
 class RecordingResponse(BaseModel):
     id: str
     title: str
-    file_path: str
     duration: Optional[float] = None
     file_size: int
     status: str
     created_at: str
     transcript: Optional[str] = None
     summary: Optional[str] = None
+    original_filename: str
+    format: str
+    mime_type: str
 
 class RecordingList(BaseModel):
     recordings: List[RecordingResponse]
@@ -91,28 +93,22 @@ async def upload_recording(
                 detail="文件大小超過100MB限制"
             )
         
-        # 生成唯一文件名
-        recording_id = uuid.uuid4()
+        # 獲取文件擴展名和MIME類型
         file_extension = os.path.splitext(file.filename)[1] if file.filename else '.wav'
-        filename = f"{recording_id}{file_extension}"
+        format_str = file_extension.lstrip('.').lower()
         
-        # 確保上傳目錄存在
-        upload_dir = "uploads"
-        os.makedirs(upload_dir, exist_ok=True)
+        # 確定MIME類型
+        mime_type = file.content_type or 'audio/octet-stream'
         
-        # 保存文件
-        file_path = os.path.join(upload_dir, filename)
-        with open(file_path, "wb") as f:
-            f.write(content)
-        
-        # 創建錄音記錄
+        # 創建錄音記錄，直接將音頻數據存儲到DB
         recording = Recording(
             user_id=current_user.id,
             title=title or f"錄音 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            original_filename=file.filename,
-            file_path=file_path,
+            original_filename=file.filename or f"recording.{format_str}",
+            audio_data=content,  # 直接存儲音頻數據
             file_size=len(content),
-            format_str=file_extension.lstrip('.').lower(),
+            format_str=format_str,
+            mime_type=mime_type,
             status=RecordingStatus.UPLOADING
         )
         
@@ -121,13 +117,13 @@ async def upload_recording(
         await db.refresh(recording)
         
         # 背景任務處理語音轉文字和摘要
+        # 注意：現在不傳遞文件路徑，而是傳遞錄音ID
         background_tasks.add_task(
             process_recording_async,
-            str(recording.id),
-            file_path
+            str(recording.id)
         )
         
-        logger.info(f"📤 錄音上傳成功: {recording.id}, 用戶: {current_user.id}")
+        logger.info(f"📤 錄音上傳成功: {recording.id}, 用戶: {current_user.id}, 大小: {len(content)/1024/1024:.2f}MB")
         
         return UploadResponse(
             message="錄音上傳成功，正在處理中...",
@@ -184,13 +180,15 @@ async def get_recordings(
             recording_responses.append(RecordingResponse(
                 id=str(recording.id),
                 title=recording.title,
-                file_path=recording.file_path,
                 duration=recording.duration,
                 file_size=recording.file_size,
                 status=recording.status.value if hasattr(recording.status, 'value') else recording.status,
                 created_at=recording.created_at.isoformat() if recording.created_at else None,
                 transcript=analysis.transcription if analysis else None,
-                summary=analysis.summary if analysis else None
+                summary=analysis.summary if analysis else None,
+                original_filename=recording.original_filename,
+                format=recording.format,
+                mime_type=recording.mime_type
             ))
         
         return RecordingList(
@@ -320,13 +318,15 @@ async def get_recording(
         return RecordingResponse(
             id=str(recording.id),
             title=recording.title,
-            file_path=recording.file_path,
             duration=recording.duration,
             file_size=recording.file_size,
             status=recording.status.value if hasattr(recording.status, 'value') else recording.status,
             created_at=recording.created_at.isoformat() if recording.created_at else None,
             transcript=analysis.transcription if analysis else None,
-            summary=analysis.summary if analysis else None
+            summary=analysis.summary if analysis else None,
+            original_filename=recording.original_filename,
+            format=recording.format,
+            mime_type=recording.mime_type
         )
         
     except HTTPException:
@@ -365,12 +365,8 @@ async def delete_recording(
                 detail="沒有權限刪除此錄音"
             )
         
-        # 刪除文件
-        try:
-            if os.path.exists(recording.file_path):
-                os.remove(recording.file_path)
-        except Exception as e:
-            logger.warning(f"刪除文件失敗: {e}")
+        # 音頻數據現在存儲在DB中，不需要刪除文件
+        logger.info(f"🗑️ 刪除錄音 {recording_id}，數據存儲在DB中")
         
         # 刪除相關的分析結果
         analysis_result = await db.execute(
@@ -380,7 +376,7 @@ async def delete_recording(
         if analysis:
             await db.delete(analysis)
         
-        # 刪除錄音
+        # 刪除錄音（連同音頻數據）
         await db.delete(recording)
         await db.commit()
         
@@ -396,7 +392,7 @@ async def delete_recording(
         )
 
 
-async def process_recording_async(recording_id: str, file_path: str):
+async def process_recording_async(recording_id: str):
     """異步處理錄音文件（語音轉文字和摘要生成）"""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from config import AppConfig
@@ -427,7 +423,11 @@ async def process_recording_async(recording_id: str, file_path: str):
         # 語音轉文字
         logger.info(f"🎙️ 開始處理錄音 {recording_id} 的語音轉文字")
         try:
-            result = await stt_service.transcribe_audio(file_path)
+            result = await stt_service.transcribe_audio_data(
+                recording.audio_data, 
+                recording.format, 
+                recording.mime_type
+            )
         except Exception as e:
             logger.error(f"❌ 語音轉文字呼叫失敗: {str(e)}")
             raise
@@ -539,8 +539,7 @@ async def reprocess_recording(
         # 重新處理
         background_tasks.add_task(
             process_recording_async,
-            recording_id,
-            recording.file_path
+            recording_id
         )
         
         return {"message": "重新處理已開始"}
@@ -552,4 +551,50 @@ async def reprocess_recording(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="重新處理失敗"
+        )
+
+
+@recordings_router.get("/{recording_id}/download")
+async def download_recording(
+    recording_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """從資料庫下載音頻文件"""
+    try:
+        result = await db.execute(
+            select(Recording).where(Recording.id == uuid.UUID(recording_id))
+        )
+        recording = result.scalars().first()
+        
+        if not recording:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="錄音不存在"
+            )
+        
+        # 檢查權限
+        if recording.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="沒有權限下載此錄音"
+            )
+        
+        # 從資料庫讀取音頻數據
+        audio_data = recording.audio_data
+        
+        # 返回音頻數據
+        return Response(
+            content=audio_data,
+            media_type=recording.mime_type,
+            headers={"Content-Disposition": f"attachment; filename={recording.original_filename}"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"從資料庫下載音頻文件錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="從資料庫下載音頻文件失敗"
         ) 
