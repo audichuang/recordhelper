@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+API 路由初始化模組。
+
+此模組負責匯總所有獨立的 API 路由器 (例如認證、使用者、錄音等)，
+並提供一個 `init_api_routes` 函數，用於將這些路由器整合到主 FastAPI 應用程式中。
+這樣可以保持路由定義的模組化和組織性。
+"""
 from fastapi import FastAPI
 from .auth import auth_router
 from .users import users_router
