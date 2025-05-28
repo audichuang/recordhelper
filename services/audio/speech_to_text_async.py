@@ -150,7 +150,14 @@ class AsyncSpeechToTextService:
                     else:
                         logger.warning("⚠️ 無法獲取音頻時長信息")
                 
-                logger.info(f"✅ 音頻數據轉錄完成，轉錄文本長度: {len(result.get('transcript') or result.get('text') or '')}")
+                # 統一返回格式
+                transcription_text = result.get('transcript') or result.get('text') or ''
+                logger.info(f"✅ 音頻數據轉錄完成，轉錄文本長度: {len(transcription_text)}")
+                
+                # 確保返回格式統一
+                if 'transcription' not in result:
+                    result['transcription'] = transcription_text
+                
                 return result
                 
             finally:
@@ -194,7 +201,14 @@ class AsyncSpeechToTextService:
                 else:
                     logger.warning("⚠️ 無法獲取音頻時長信息")
             
-            logger.info(f"✅ 音頻轉錄完成: {audio_path}")
+            # 統一返回格式
+            transcription_text = result.get('transcript') or result.get('text') or ''
+            logger.info(f"✅ 音頻轉錄完成: {audio_path}，文本長度: {len(transcription_text)}")
+            
+            # 確保返回格式統一
+            if 'transcription' not in result:
+                result['transcription'] = transcription_text
+            
             return result
             
         except Exception as e:

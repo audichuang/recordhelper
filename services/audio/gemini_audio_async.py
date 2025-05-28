@@ -103,8 +103,24 @@ class AsyncGeminiAudioService:
             
             # 上傳文件
             logger.info("📤 上傳音頻文件到 Gemini")
-            uploaded_file = client.files.upload(file=file_path)
-            logger.info(f"✅ 文件上傳成功: {uploaded_file.name}")
+            # 從文件擴展名推斷 MIME type
+            file_ext = Path(file_path).suffix.lower()
+            mime_type_map = {
+                '.mp3': 'audio/mp3',
+                '.wav': 'audio/wav',
+                '.m4a': 'audio/mp4',
+                '.aac': 'audio/aac',
+                '.ogg': 'audio/ogg',
+                '.flac': 'audio/flac',
+                '.webm': 'audio/webm',
+                '.audio': 'audio/mpeg'  # 預設為 mp3
+            }
+            mime_type = mime_type_map.get(file_ext, 'audio/mpeg')
+            
+            # 使用 UploadFileConfig 來指定 MIME type
+            upload_config = {'mime_type': mime_type}
+            uploaded_file = client.files.upload(file=file_path, config=upload_config)
+            logger.info(f"✅ 文件上傳成功: {uploaded_file.name}, MIME type: {mime_type}")
             
             # 創建詳細的提示
             transcription_prompt = """請將我上傳的錄音檔，轉錄成文字稿
@@ -192,9 +208,24 @@ class AsyncGeminiAudioService:
         try:
             client = self._get_client()
             
-            # 上傳文件
-            uploaded_file = client.files.upload(file=file_path)
-            logger.info(f"✅ 文件上傳成功: {uploaded_file.name}")
+            # 上傳文件，帶上 MIME type
+            file_ext = Path(file_path).suffix.lower()
+            mime_type_map = {
+                '.mp3': 'audio/mp3',
+                '.wav': 'audio/wav',
+                '.m4a': 'audio/mp4',
+                '.aac': 'audio/aac',
+                '.ogg': 'audio/ogg',
+                '.flac': 'audio/flac',
+                '.webm': 'audio/webm',
+                '.audio': 'audio/mpeg'  # 預設為 mp3
+            }
+            mime_type = mime_type_map.get(file_ext, 'audio/mpeg')
+            
+            # 使用 UploadFileConfig 來指定 MIME type
+            upload_config = {'mime_type': mime_type}
+            uploaded_file = client.files.upload(file=file_path, config=upload_config)
+            logger.info(f"✅ 文件上傳成功: {uploaded_file.name}, MIME type: {mime_type}")
             
             # 發送自定義提示請求
             response = client.models.generate_content(
@@ -308,8 +339,23 @@ class AsyncGeminiAudioService:
     def _transcribe_with_client_sync(self, file_path: str, client) -> Dict[str, Any]:
         """使用指定客戶端進行同步轉錄"""
         try:
-            # 上傳文件
-            uploaded_file = client.files.upload(file=file_path)
+            # 上傳文件，帶上 MIME type
+            file_ext = Path(file_path).suffix.lower()
+            mime_type_map = {
+                '.mp3': 'audio/mp3',
+                '.wav': 'audio/wav',
+                '.m4a': 'audio/mp4',
+                '.aac': 'audio/aac',
+                '.ogg': 'audio/ogg',
+                '.flac': 'audio/flac',
+                '.webm': 'audio/webm',
+                '.audio': 'audio/mpeg'  # 預設為 mp3
+            }
+            mime_type = mime_type_map.get(file_ext, 'audio/mpeg')
+            
+            # 使用 UploadFileConfig 來指定 MIME type
+            upload_config = {'mime_type': mime_type}
+            uploaded_file = client.files.upload(file=file_path, config=upload_config)
             
             # 創建轉錄提示
             transcription_prompt = """請將上傳的音頻文件轉錄為文字，包括說話者識別和時間戳。
