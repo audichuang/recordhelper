@@ -75,16 +75,29 @@ def main():
         print(banner)
         
         # 啟動服務器
-        uvicorn.run(
-            "main_fastapi:create_app",
-            factory=True,
-            host=host,
-            port=port,
-            reload=reload,
-            workers=workers if not reload else 1,  # reload模式只能用1個worker
-            log_level="info",
-            access_log=True
-        )
+        if reload:
+            # reload 模式下使用 factory 函數，讓 uvicorn 自動重載
+            uvicorn.run(
+                "main_fastapi:create_app",
+                factory=True,
+                host=host,
+                port=port,
+                reload=True,
+                workers=1,  # reload模式只能用1個worker
+                log_level="info",
+                access_log=True
+            )
+        else:
+            # 生產模式下直接使用已創建的 app 實例
+            uvicorn.run(
+                app,
+                host=host,
+                port=port,
+                reload=False,
+                workers=workers,
+                log_level="info",
+                access_log=True
+            )
         
     except KeyboardInterrupt:
         print(f"\n{Colors.BRIGHT_YELLOW}👋 收到停止信號，正在關閉服務...{Colors.RESET}")

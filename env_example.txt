@@ -26,16 +26,35 @@ LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_頻道訪問令牌
 LINE_CHANNEL_SECRET=你的_LINE_頻道秘密
 
 # 🚀 語音轉文字服務配置
-# 可選擇: "openai", "deepgram", "local_whisper", "faster_whisper", 或 "gemini_audio"
-# 推薦: faster_whisper (Mac M4 Pro 最佳選擇，免費且高性能)
-# 新增: gemini_audio (Gemini 2.0 音頻理解，支援直接處理音頻+摘要)
-SPEECH_TO_TEXT_PROVIDER=faster_whisper
+# 可選擇: "assemblyai", "deepgram", "openai", "local_whisper", "faster_whisper", 或 "gemini_audio"
+# 
+# 🏆 推薦優先順序:
+# 1. assemblyai - 最佳 SRT 格式支援，精確時間戳，說話者識別
+# 2. deepgram - 速度最快，成本效益高，良好的準確性
+# 3. faster_whisper - 本地免費，Mac M4 Pro 性能優異
+# 4. gemini_audio - 直接音頻理解，同時提供轉錄+摘要
+#
+# ⚡ SRT 格式優勢:
+# - AssemblyAI: 原生 SRT 支援，精確到毫秒的時間戳
+# - Deepgram: 優秀的單詞級時間戳，易於轉換為 SRT
+# - 其他服務: 需要額外處理才能生成準確的 SRT
+#
+SPEECH_TO_TEXT_PROVIDER=assemblyai
 
 # OpenAI 配置 (當使用 OpenAI Whisper 時)
 OPENAI_API_KEY=你的_OpenAI_API_金鑰
 WHISPER_MODEL_NAME=whisper-1
 
-# Deepgram 配置 (當使用 Deepgram 時)
+# 🥇 AssemblyAI 配置 (推薦首選 - 最佳 SRT 格式支援)
+ASSEMBLYAI_API_KEY=你的_AssemblyAI_API_金鑰
+# 支援多個 AssemblyAI API 金鑰輪換使用
+ASSEMBLYAI_API_KEY_1=你的_第一個_AssemblyAI_API_金鑰
+ASSEMBLYAI_API_KEY_2=你的_第二個_AssemblyAI_API_金鑰
+ASSEMBLYAI_API_KEY_3=你的_第三個_AssemblyAI_API_金鑰
+ASSEMBLYAI_MODEL=best              # best 或 nano (更快但準確性較低)
+ASSEMBLYAI_LANGUAGE=zh             # 中文（自動識別簡繁體）
+
+# 🥈 Deepgram 配置 (推薦備用 - 速度最快)
 DEEPGRAM_API_KEY=你的_Deepgram_API_金鑰
 # 支援多個 Deepgram API 金鑰輪換使用（提高配額和穩定性）
 DEEPGRAM_API_KEY_1=你的_第一個_Deepgram_API_金鑰
@@ -103,30 +122,51 @@ DEBUG=true
 
 # 💰 服務比較 (Mac M4 Pro):
 # 
-# 🏆 Faster-Whisper (推薦):
+# 🥇 AssemblyAI (推薦首選 - SRT 格式最佳):
+#   - 成本: $0.00025/秒 (約$0.015/分鐘)
+#   - 速度: 快 (雲端)
+#   - 準確性: 極高
+#   - 特色: 
+#     ✅ 原生 SRT 格式輸出
+#     ✅ 精確到毫秒的時間戳
+#     ✅ 說話者識別
+#     ✅ 自動標點符號
+#     ✅ 單詞級時間戳
+#     ✅ 多語言支援（自動識別）
+#   - SRT 優勢: 無需額外處理，直接輸出標準 SRT
+#
+# 🥈 Deepgram (推薦備用 - 速度最快): 
+#   - 成本: $0.0043/分鐘 (最經濟)
+#   - 速度: 最快 (雲端)
+#   - 準確性: 高
+#   - 特色:
+#     ✅ 即時串流處理
+#     ✅ 單詞級時間戳
+#     ✅ 易於轉換為 SRT
+#     ✅ 多說話者識別
+#   - SRT 優勢: 時間戳精確，轉換簡單
+#
+# 🏆 Faster-Whisper (本地免費):
 #   - 成本: 免費
 #   - 速度: 極快 (4-8倍於原版 Whisper)
 #   - 準確性: 極高
 #   - 記憶體: 優化 (減少50%)
 #   - 特色: int8量化，多核心並行，支援時間戳
+#   - SRT 支援: 需要額外處理分段
 #
 # 🆕 Gemini Audio (最新):
 #   - 成本: 依 Gemini API 計費
 #   - 速度: 快 (雲端，單次處理)
 #   - 準確性: 極高
-#   - 特色: 直接音頻理解，同時提供轉錄+摘要，支援非語音內容分析
+#   - 特色: 直接音頻理解，同時提供轉錄+摘要
 #   - 限制: 最大 100MB，9.5小時音頻
-#   - 支援格式: MP3, WAV, AIFF, AAC, OGG, FLAC
+#   - SRT 支援: 有限，主要用於整體理解
 #
 # ☁️ OpenAI Whisper API: 
 #   - 成本: $0.006/分鐘 
 #   - 速度: 快 (雲端)
 #   - 準確性: 極高
-#
-# ☁️ Deepgram: 
-#   - 成本: $0.0043/分鐘 (節省28%)
-#   - 速度: 最快 (雲端)
-#   - 準確性: 高
+#   - SRT 支援: 基本時間戳，需要處理
 #
 # 🐌 原版 Local Whisper: 
 #   - 成本: 免費

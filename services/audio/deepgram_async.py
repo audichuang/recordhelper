@@ -10,6 +10,7 @@ from pathlib import Path
 import random
 
 from config import AppConfig
+from .srt_formatter import SRTFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,37 @@ class AsyncDeepgramService:
             # 格式化時間軸文本（類似 Gemini 的格式）
             timeline_transcript = self._format_timeline_transcript(utterances)
             
+            # 生成 SRT 格式字幕
+            srt_content = ''
+            words = []
+            
+            # 從 words 數據提取時間戳資訊
+            if 'words' in alternative:
+                for word_info in alternative['words']:
+                    words.append({
+                        'text': word_info.get('word', ''),
+                        'start': word_info.get('start', 0),
+                        'end': word_info.get('end', 0),
+                        'confidence': word_info.get('confidence', 0),
+                        'speaker': word_info.get('speaker')  # Deepgram 的 diarize 功能
+                    })
+                
+                # 生成 SRT
+                srt_content = SRTFormatter.generate_srt_from_words(words)
+            
+            # 如果沒有 words 數據但有 utterances，使用 utterances 生成 SRT
+            elif utterances:
+                segments = []
+                for utterance in utterances:
+                    segments.append({
+                        'text': utterance.get('transcript', ''),
+                        'start': utterance.get('start', 0),
+                        'end': utterance.get('end', 0),
+                        'speaker': f"Speaker {utterance.get('speaker', 0)}" if utterance.get('speaker') is not None else None
+                    })
+                
+                srt_content = SRTFormatter.generate_srt_from_segments(segments)
+            
             # 格式化返回結果
             return {
                 'transcript': transcript,
@@ -115,7 +147,10 @@ class AsyncDeepgramService:
                 'confidence': alternative.get('confidence', 0),
                 'provider': 'deepgram',
                 'model': self.model,
-                'has_timeline': True
+                'has_timeline': True,
+                'words': words,
+                'srt': srt_content,
+                'has_srt': bool(srt_content)
             }
             
         except Exception as e:

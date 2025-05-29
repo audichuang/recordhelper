@@ -96,7 +96,10 @@ async def lifespan(app: FastAPI):
 def create_app(config: AppConfig = None) -> FastAPI:
     """創建FastAPI應用"""
     if config is None:
+        logger.info("📋 從環境變數載入配置...")
+        logger.info(f"📋 SPEECH_TO_TEXT_PROVIDER 環境變數: {os.getenv('SPEECH_TO_TEXT_PROVIDER', 'not set')}")
         config = AppConfig.from_env()
+        logger.info(f"📋 配置載入完成，語音服務提供商: {config.speech_to_text_provider}")
     
     # 創建FastAPI應用
     app = FastAPI(

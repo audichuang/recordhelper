@@ -24,6 +24,7 @@ from .whisper_async import AsyncWhisperService
 from .deepgram_async import AsyncDeepgramService
 from .local_whisper_async import AsyncLocalWhisperService
 from .gemini_audio_async import AsyncGeminiAudioService
+from .assemblyai_async import AsyncAssemblyAIService
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,39 @@ class AsyncSpeechToTextService:
         self.config = config
         self.provider = config.speech_to_text_provider.lower()
         
+        logger.info(f"🔧 正在初始化語音轉文字服務，配置的提供商: {self.provider}")
+        logger.info(f"🔧 從環境變數讀取: SPEECH_TO_TEXT_PROVIDER = {os.getenv('SPEECH_TO_TEXT_PROVIDER', 'not set')}")
+        
         # 初始化不同的服務
-        self.whisper_service = AsyncWhisperService(config)
-        self.deepgram_service = AsyncDeepgramService(config)
-        self.local_whisper_service = AsyncLocalWhisperService(config)
-        self.gemini_audio_service = AsyncGeminiAudioService(config)
+        try:
+            self.whisper_service = AsyncWhisperService(config)
+        except Exception as e:
+            logger.warning(f"⚠️ OpenAI Whisper 服務初始化失敗: {e}")
+            self.whisper_service = None
+            
+        try:
+            self.deepgram_service = AsyncDeepgramService(config)
+        except Exception as e:
+            logger.warning(f"⚠️ Deepgram 服務初始化失敗: {e}")
+            self.deepgram_service = None
+            
+        try:
+            self.local_whisper_service = AsyncLocalWhisperService(config)
+        except Exception as e:
+            logger.warning(f"⚠️ 本地 Whisper 服務初始化失敗: {e}")
+            self.local_whisper_service = None
+            
+        try:
+            self.gemini_audio_service = AsyncGeminiAudioService(config)
+        except Exception as e:
+            logger.warning(f"⚠️ Gemini Audio 服務初始化失敗: {e}")
+            self.gemini_audio_service = None
+            
+        try:
+            self.assemblyai_service = AsyncAssemblyAIService(config)
+        except Exception as e:
+            logger.warning(f"⚠️ AssemblyAI 服務初始化失敗: {e}")
+            self.assemblyai_service = None
         
         logger.info(f"🔧 語音轉文字服務初始化完成，使用提供商: {self.provider}")
     
@@ -239,6 +268,10 @@ class AsyncSpeechToTextService:
             if self.gemini_audio_service:
                 status["services"]["gemini_audio"] = await self.gemini_audio_service.check_status()
             
+            # 檢查AssemblyAI狀態
+            if self.assemblyai_service:
+                status["services"]["assemblyai"] = await self.assemblyai_service.check_status()
+            
             status["available"] = True
             logger.info(f"🔍 語音轉文字服務狀態檢查完成，主要提供商: {self.provider}")
             
@@ -254,9 +287,11 @@ class AsyncSpeechToTextService:
         使用智能備用方案轉錄音頻
         
         備用順序：
-        1. 主要服務 (根據配置 - deepgram 或 gemini_audio)
-        2. 如果主要服務失敗，嘗試另一個服務 (deepgram <-> gemini_audio)
-        3. OpenAI Whisper (最後備用方案)
+        1. 主要服務 (根據配置)
+        2. AssemblyAI (推薦首選 - 最佳 SRT 支援)
+        3. Deepgram (推薦備用 - 速度最快)
+        4. Gemini Audio (如果前兩者都失敗)
+        5. OpenAI Whisper (最後備用方案)
         """
         last_error = None
         
@@ -265,14 +300,16 @@ class AsyncSpeechToTextService:
             logger.info(f"🔄 嘗試主要服務: {self.provider}")
             if self.provider == "openai":
                 result = await self.whisper_service.transcribe(file_path)
-            elif self.provider == "whisper_local":
-                # 如果配置是本地，直接使用 deepgram 替代
-                logger.info("🔄 本地 Whisper 已棄用，改用 Deepgram")
-                result = await self.deepgram_service.transcribe(file_path)
+            elif self.provider == "whisper_local" or self.provider == "local_whisper" or self.provider == "faster_whisper":
+                # 如果配置是本地，直接使用 AssemblyAI 替代
+                logger.info("🔄 本地 Whisper 配置，改用 AssemblyAI (推薦)")
+                result = await self.assemblyai_service.transcribe(file_path)
             elif self.provider == "deepgram":
                 result = await self.deepgram_service.transcribe(file_path)
             elif self.provider == "gemini_audio":
                 result = await self._transcribe_with_gemini_no_fallback(file_path)
+            elif self.provider == "assemblyai":
+                result = await self.assemblyai_service.transcribe(file_path)
             else:
                 raise ValueError(f"不支持的轉錄服務: {self.provider}")
             
@@ -283,36 +320,43 @@ class AsyncSpeechToTextService:
             last_error = e
             logger.warning(f"⚠️ 主要服務 {self.provider} 失敗: {str(e)}")
         
-        # 2. 嘗試備用服務 (Deepgram <-> Gemini Audio 互為備用)
-        if self.provider == "deepgram":
-            # 如果 Deepgram 失敗，嘗試 Gemini
-            if self.gemini_audio_service and hasattr(self.gemini_audio_service, 'api_keys') and self.gemini_audio_service.api_keys:
-                try:
-                    logger.info("🔄 嘗試備用服務: Gemini Audio")
-                    # Gemini 會自動進行 API key 負載均衡
-                    result = await self.gemini_audio_service.transcribe(file_path)
-                    result['backup_provider'] = 'gemini_audio'
-                    logger.info("✅ Gemini Audio 備用轉錄成功")
-                    return result
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"⚠️ Gemini Audio 備用服務失敗: {str(e)}")
-                    
-        elif self.provider == "gemini_audio":
-            # 如果 Gemini 失敗，嘗試 Deepgram
-            if self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
-                try:
-                    logger.info("🔄 嘗試備用服務: Deepgram")
-                    # Deepgram 會自動進行 API key 負載均衡
-                    result = await self.deepgram_service.transcribe(file_path)
-                    result['backup_provider'] = 'deepgram'
-                    logger.info("✅ Deepgram 備用轉錄成功")
-                    return result
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"⚠️ Deepgram 備用服務失敗: {str(e)}")
+        # 2. 嘗試 AssemblyAI (如果不是主要服務)
+        if self.provider != "assemblyai" and self.assemblyai_service and hasattr(self.assemblyai_service, 'api_keys') and self.assemblyai_service.api_keys:
+            try:
+                logger.info("🔄 嘗試推薦服務: AssemblyAI (最佳 SRT 支援)")
+                result = await self.assemblyai_service.transcribe(file_path)
+                result['backup_provider'] = 'assemblyai'
+                logger.info("✅ AssemblyAI 轉錄成功")
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ AssemblyAI 服務失敗: {str(e)}")
         
-        # 3. 最後嘗試 OpenAI Whisper
+        # 3. 嘗試 Deepgram (如果不是主要服務)
+        if self.provider != "deepgram" and self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
+            try:
+                logger.info("🔄 嘗試備用服務: Deepgram (速度最快)")
+                result = await self.deepgram_service.transcribe(file_path)
+                result['backup_provider'] = 'deepgram'
+                logger.info("✅ Deepgram 備用轉錄成功")
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Deepgram 備用服務失敗: {str(e)}")
+        
+        # 4. 嘗試 Gemini Audio (如果不是主要服務)
+        if self.provider != "gemini_audio" and self.gemini_audio_service and hasattr(self.gemini_audio_service, 'api_keys') and self.gemini_audio_service.api_keys:
+            try:
+                logger.info("🔄 嘗試備用服務: Gemini Audio")
+                result = await self.gemini_audio_service.transcribe(file_path)
+                result['backup_provider'] = 'gemini_audio'
+                logger.info("✅ Gemini Audio 備用轉錄成功")
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Gemini Audio 備用服務失敗: {str(e)}")
+        
+        # 5. 最後嘗試 OpenAI Whisper
         if self.provider != "openai" and self.whisper_service and hasattr(self.whisper_service, 'api_key') and self.whisper_service.api_key:
             try:
                 logger.info("🔄 嘗試最後備用: OpenAI Whisper")
@@ -378,5 +422,10 @@ class AsyncSpeechToTextService:
             status["services"]["gemini_audio"] = await self.gemini_audio_service.check_status()
         except Exception as e:
             status["services"]["gemini_audio"] = {"available": False, "error": str(e)}
+        
+        try:
+            status["services"]["assemblyai"] = await self.assemblyai_service.check_status()
+        except Exception as e:
+            status["services"]["assemblyai"] = {"available": False, "error": str(e)}
         
         return status 

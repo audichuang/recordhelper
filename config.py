@@ -4,8 +4,8 @@ from typing import List
 from dotenv import load_dotenv
 from datetime import timedelta
 
-# 載入環境變數
-load_dotenv()
+# 載入環境變數（override=True 會覆蓋系統環境變數）
+load_dotenv(override=True)
 
 
 @dataclass
@@ -42,6 +42,11 @@ class AppConfig:
     deepgram_api_keys: List[str] = None
     deepgram_model: str = "nova-2"
     deepgram_language: str = "zh-TW"
+    
+    # AssemblyAI 配置
+    assemblyai_api_keys: List[str] = None
+    assemblyai_model: str = "best"
+    assemblyai_language: str = "zh"
     
     # 本地 Whisper 配置
     local_whisper_model: str = "turbo"
@@ -90,7 +95,7 @@ class AppConfig:
         jwt_secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
         
         # 語音轉文字服務配置
-        speech_provider = os.getenv("SPEECH_TO_TEXT_PROVIDER", "openai").lower()
+        speech_provider = os.getenv("SPEECH_TO_TEXT_PROVIDER", "assemblyai").lower()
         openai_api_key = os.getenv("OPENAI_API_KEY", "")
         
         # Deepgram API 金鑰
@@ -104,6 +109,18 @@ class AppConfig:
             single_key = os.getenv("DEEPGRAM_API_KEY")
             if single_key:
                 deepgram_api_keys.append(single_key)
+        
+        # AssemblyAI API 金鑰
+        assemblyai_api_keys = []
+        for i in range(1, 11):
+            key = os.getenv(f"ASSEMBLYAI_API_KEY_{i}")
+            if key:
+                assemblyai_api_keys.append(key)
+        
+        if not assemblyai_api_keys:
+            single_key = os.getenv("ASSEMBLYAI_API_KEY")
+            if single_key:
+                assemblyai_api_keys.append(single_key)
         
         # Google API 金鑰
         google_api_keys = []
@@ -154,6 +171,9 @@ class AppConfig:
             deepgram_api_keys=deepgram_api_keys,
             deepgram_model=os.getenv("DEEPGRAM_MODEL", "nova-2"),
             deepgram_language=os.getenv("DEEPGRAM_LANGUAGE", "zh-TW"),
+            assemblyai_api_keys=assemblyai_api_keys,
+            assemblyai_model=os.getenv("ASSEMBLYAI_MODEL", "best"),
+            assemblyai_language=os.getenv("ASSEMBLYAI_LANGUAGE", "zh"),
             local_whisper_model=os.getenv("LOCAL_WHISPER_MODEL", "turbo"),
             local_whisper_language=os.getenv("LOCAL_WHISPER_LANGUAGE", "zh"),
             local_whisper_task=os.getenv("LOCAL_WHISPER_TASK", "transcribe"),

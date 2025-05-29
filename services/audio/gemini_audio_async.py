@@ -6,13 +6,15 @@
 import logging
 import asyncio
 import aiofiles
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import os
 import random
 import tempfile
+import re
 
 from config import AppConfig
+from .srt_formatter import SRTFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,12 @@ class AsyncGeminiAudioService:
             transcription_text = response.text.strip()
             logger.info(f"✅ Gemini Audio 轉錄成功，文本長度: {len(transcription_text)}")
             
+            # 解析時間戳記和說話者，生成 SRT
+            segments = self._parse_gemini_transcript(transcription_text)
+            srt_content = ''
+            if segments:
+                srt_content = SRTFormatter.generate_srt_from_segments(segments)
+            
             return {
                 'transcript': transcription_text,
                 'text': transcription_text,
@@ -158,7 +166,10 @@ class AsyncGeminiAudioService:
                 'confidence': 0.95,
                 'language': 'zh',
                 'speaker_detection': True,
-                'timestamp_enabled': True
+                'timestamp_enabled': True,
+                'segments': segments,
+                'srt': srt_content,
+                'has_srt': bool(srt_content)
             }
             
         except Exception as e:
@@ -371,14 +382,99 @@ class AsyncGeminiAudioService:
             if not response or not response.text:
                 raise Exception("轉錄響應為空")
             
+            transcription_text = response.text.strip()
+            
+            # 解析時間戳記和說話者，生成 SRT
+            segments = self._parse_gemini_transcript(transcription_text)
+            srt_content = ''
+            if segments:
+                srt_content = SRTFormatter.generate_srt_from_segments(segments)
+            
             return {
-                'transcript': response.text.strip(),
-                'text': response.text.strip(),
+                'transcript': transcription_text,
+                'text': transcription_text,
                 'provider': 'gemini_audio_with_client',
                 'model': self.model,
-                'confidence': 0.95
+                'confidence': 0.95,
+                'segments': segments,
+                'srt': srt_content,
+                'has_srt': bool(srt_content)
             }
             
         except Exception as e:
             logger.error(f"❌ 客戶端轉錄失敗: {str(e)}")
             raise 
+    
+    def _parse_gemini_transcript(self, transcript: str) -> List[Dict[str, Any]]:
+        """
+        解析 Gemini 的時間戳格式轉錄文本
+        
+        預期格式：
+        [00:01] 說話者A：文字內容
+        [00:05] 說話者B：另一段文字
+        
+        Args:
+            transcript: Gemini 返回的轉錄文本
+            
+        Returns:
+            分段列表，每段包含 text, start, end, speaker
+        """
+        segments = []
+        lines = transcript.strip().split('\n')
+        
+        # 正則表達式匹配時間戳和說話者
+        # 匹配格式：[MM:SS] 或 [HH:MM:SS] 說話者X：內容
+        pattern = r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*([^：:]+)[：:]\s*(.*)'
+        
+        current_segment = None
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            match = re.match(pattern, line)
+            if match:
+                # 如果有前一個段落，設置其結束時間
+                if current_segment:
+                    segments.append(current_segment)
+                
+                # 解析時間戳
+                time_str = match.group(1)
+                speaker = match.group(2).strip()
+                text = match.group(3).strip()
+                
+                # 轉換時間為秒數
+                time_parts = time_str.split(':')
+                if len(time_parts) == 2:  # MM:SS
+                    seconds = int(time_parts[0]) * 60 + int(time_parts[1])
+                else:  # HH:MM:SS
+                    seconds = int(time_parts[0]) * 3600 + int(time_parts[1]) * 60 + int(time_parts[2])
+                
+                current_segment = {
+                    'text': text,
+                    'start': seconds,
+                    'end': seconds + 5,  # 預設持續5秒，會被下一個段落覆蓋
+                    'speaker': speaker
+                }
+            else:
+                # 如果沒有時間戳，可能是續行，添加到當前段落
+                if current_segment:
+                    current_segment['text'] += ' ' + line
+        
+        # 添加最後一個段落
+        if current_segment:
+            segments.append(current_segment)
+        
+        # 調整結束時間
+        for i in range(len(segments) - 1):
+            segments[i]['end'] = segments[i + 1]['start']
+        
+        # 最後一個段落的結束時間保持預設或根據內容長度估算
+        if segments:
+            last_segment = segments[-1]
+            # 估算：每個字約0.3秒的說話速度
+            estimated_duration = len(last_segment['text']) * 0.3
+            last_segment['end'] = last_segment['start'] + max(5, min(estimated_duration, 30))
+        
+        return segments
