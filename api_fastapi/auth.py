@@ -34,6 +34,13 @@ class UserLogin(BaseModel):
 class TokenRefresh(BaseModel):
     refresh_token: str
 
+class AppleLogin(BaseModel):
+    user_id: str
+    email: Optional[EmailStr] = None
+    full_name: str
+    identity_token: str
+    authorization_code: str
+
 class AuthResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -169,6 +176,84 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="登入失敗"
+        )
+
+
+@auth_router.post("/apple", response_model=AuthResponse)
+async def apple_login(
+    apple_data: AppleLogin,
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """Apple ID 登入"""
+    try:
+        # TODO: 這裡應該要驗證 Apple identity token
+        # 在生產環境中，需要使用 Apple 的公鑰來驗證 JWT token
+        # 這裡為了開發測試，暫時跳過驗證步驟
+        
+        # 檢查用戶是否已存在（使用 Apple User ID）
+        result = await db.execute(
+            select(User).where(
+                or_(
+                    User.apple_id == apple_data.user_id,
+                    User.email == apple_data.email
+                )
+            )
+        )
+        user = result.scalars().first()
+        
+        if user:
+            # 如果用戶已存在，更新 Apple ID（如果需要）
+            if not user.apple_id:
+                user.apple_id = apple_data.user_id
+                await db.commit()
+        else:
+            # 創建新用戶
+            # 生成一個唯一的用戶名
+            base_username = apple_data.full_name.replace(" ", "_").lower()
+            username = base_username
+            counter = 1
+            
+            # 確保用戶名唯一
+            while True:
+                existing = await db.execute(
+                    select(User).where(User.username == username)
+                )
+                if not existing.scalars().first():
+                    break
+                username = f"{base_username}_{counter}"
+                counter += 1
+            
+            user = User(
+                email=apple_data.email or f"{apple_data.user_id}@apple.local",
+                username=username,
+                apple_id=apple_data.user_id,
+                full_name=apple_data.full_name,
+                is_active=True
+            )
+            # Apple 用戶不需要密碼
+            user.password_hash = None
+            
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        
+        # 生成令牌
+        access_token = AuthService.create_access_token(str(user.id))
+        refresh_token = AuthService.create_refresh_token(str(user.id))
+        
+        return AuthResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            user=user.to_dict()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Apple 登入錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Apple 登入失敗"
         )
 
 

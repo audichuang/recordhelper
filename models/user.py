@@ -18,7 +18,9 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 允許為空以支援 Apple 登入
+    apple_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)  # Apple User ID
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 用戶完整姓名
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     profile_data: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -27,11 +29,16 @@ class User(Base):
     # 關聯關係
     recordings: Mapped[list["Recording"]] = relationship("Recording", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
     
-    def __init__(self, username: str, email: str, password: str, **kwargs):
+    def __init__(self, username: str, email: str, password: str = None, **kwargs):
         super().__init__(**kwargs)
         self.username = username
         self.email = email
-        self.set_password(password)
+        if password:
+            self.set_password(password)
+        # 設定其他屬性（如 apple_id, full_name）
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
         
     def set_password(self, password: str):
         """設置密碼（加密存儲）"""
@@ -39,6 +46,8 @@ class User(Base):
         
     def check_password(self, password: str) -> bool:
         """檢查密碼"""
+        if not self.password_hash:
+            return False
         return pwd_context.verify(password, self.password_hash)
         
     def to_dict(self) -> dict:
