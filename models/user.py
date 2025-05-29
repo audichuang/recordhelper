@@ -59,7 +59,9 @@ class User(Base):
             'is_active': self.is_active,
             'profile_data': self.profile_data if self.profile_data else {},
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'apple_id': self.apple_id,
+            'full_name': self.full_name
         }
     
     def __repr__(self) -> str:
