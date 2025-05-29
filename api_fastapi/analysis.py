@@ -27,6 +27,9 @@ class AnalysisResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    srt_content: Optional[str] = None
+    has_timestamps: bool = False
+    timestamps_data: Optional[Dict[str, Any]] = None
 
 class AnalysisHistoryResponse(BaseModel):
     id: str
@@ -96,7 +99,10 @@ async def get_analysis(
             provider=analysis.provider or "",
             created_at=analysis.created_at.isoformat() if analysis.created_at else None,
             updated_at=analysis.updated_at.isoformat() if analysis.updated_at else None,
-            metadata=analysis.metadata
+            metadata=analysis.analysis_metadata,
+            srt_content=analysis.srt_content,
+            has_timestamps=analysis.has_timestamps,
+            timestamps_data=analysis.timestamps_data
         )
         
     except HTTPException:
@@ -388,7 +394,22 @@ async def process_transcription(history_id: str, audio_data: bytes, provider: st
                 if transcription_result.get("has_timeline"):
                     metadata["has_timeline"] = True
                     metadata["timeline_transcript"] = transcription_result.get("timeline_transcript", "")
-                    metadata["words"] = transcription_result.get("words", [])
+                
+                # 處理 SRT 和時間戳資料
+                srt_content = transcription_result.get("srt", "")
+                has_srt = transcription_result.get("has_srt", False)
+                words_data = transcription_result.get("words", [])
+                
+                if has_srt:
+                    metadata["has_srt"] = True
+                    metadata["srt_content"] = srt_content
+                
+                if words_data:
+                    metadata["has_timestamps"] = True
+                    metadata["timestamps_data"] = {
+                        "words": words_data,
+                        "sentence_segments": []  # 可以在這裡加入句子分段資料
+                    }
                 
                 history.analysis_metadata = metadata
                 history.mark_as_completed()
@@ -428,8 +449,23 @@ async def process_transcription(history_id: str, audio_data: bytes, provider: st
                     analysis.processing_time = history.processing_time
                     analysis.provider = history.provider
                     analysis.analysis_metadata = history.analysis_metadata
+                    
+                    # 更新 SRT 和時間戳資料
+                    if srt_content:
+                        analysis.srt_content = srt_content
+                        analysis.has_timestamps = True
+                    
+                    if words_data:
+                        analysis.timestamps_data = {
+                            "words": words_data,
+                            "sentence_segments": []
+                        }
+                        analysis.has_timestamps = True
+                    
                     db.add(analysis)  # 確保變更被追蹤
                     logger.info(f"更新分析結果，轉錄長度: {len(analysis.transcription)}")
+                    if srt_content:
+                        logger.info(f"SRT 內容已儲存，長度: {len(srt_content)}")
                 
                 await db.commit()
                 logger.info(f"轉錄完成: {history_id}")

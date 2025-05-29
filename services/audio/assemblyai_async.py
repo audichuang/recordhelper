@@ -323,7 +323,7 @@ class AsyncAssemblyAIService:
                     # 生成 SRT 格式字幕
                     srt_content = ''
                     if words:
-                        srt_content = SRTFormatter.generate_srt_from_words(words)
+                        srt_content = SRTFormatter.generate_srt_from_words(words, sentence_level=True)
                     
                     # 格式化返回結果
                     return {

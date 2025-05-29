@@ -50,6 +50,10 @@ class RecordingResponse(BaseModel):
     timeline_transcript: Optional[str] = None
     has_timeline: bool = False
     analysis_metadata: Optional[dict] = None
+    # SRT 相關欄位
+    srt_content: Optional[str] = None
+    has_timestamps: bool = False
+    timestamps_data: Optional[dict] = None
 
 class RecordingList(BaseModel):
     recordings: List[RecordingResponse]
@@ -195,7 +199,11 @@ async def get_recordings(
                 summary=analysis.summary if analysis else None,
                 original_filename=recording.original_filename,
                 format=recording.format,
-                mime_type=recording.mime_type
+                mime_type=recording.mime_type,
+                # SRT 相關欄位
+                srt_content=analysis.srt_content if analysis else None,
+                has_timestamps=analysis.has_timestamps if analysis else False,
+                timestamps_data=analysis.timestamps_data if analysis else None
             ))
         
         return RecordingList(
@@ -347,7 +355,11 @@ async def get_recording(
             mime_type=recording.mime_type,
             timeline_transcript=timeline_transcript,
             has_timeline=has_timeline,
-            analysis_metadata=analysis_metadata
+            analysis_metadata=analysis_metadata,
+            # 添加 SRT 相關欄位
+            srt_content=analysis.srt_content if analysis else None,
+            has_timestamps=analysis.has_timestamps if analysis else False,
+            timestamps_data=analysis.timestamps_data if analysis else None
         )
         
     except HTTPException:
@@ -514,7 +526,7 @@ async def process_recording_async(recording_id: str):
         # 語音轉文字
         logger.info(f"🎙️ 開始處理錄音 {recording_id} 的語音轉文字")
         try:
-            result = await stt_service.transcribe_audio_data(
+            transcription_result = await stt_service.transcribe_audio_data(
                 recording.audio_data, 
                 recording.format, 
                 recording.mime_type
@@ -524,8 +536,8 @@ async def process_recording_async(recording_id: str):
             raise
         
         # 從結果字典中提取文字和時長
-        transcript = result.get('transcript') or result.get('transcription') or result.get('text')
-        duration = result.get('duration')
+        transcript = transcription_result.get('transcript') or transcription_result.get('transcription') or transcription_result.get('text')
+        duration = transcription_result.get('duration')
         
         if not transcript:
             logger.error(f"❌ 語音轉文字失敗: {recording_id}")
@@ -565,16 +577,36 @@ async def process_recording_async(recording_id: str):
             )
             analysis = result.scalars().first()
             
+            # 提取 SRT 和時間戳資料 (從 transcription_result，不是從 result)
+            srt_content = transcription_result.get('srt', '')
+            has_srt = transcription_result.get('has_srt', False)
+            words_data = transcription_result.get('words', [])
+            
             if analysis:
                 analysis.transcription = transcript
                 analysis.summary = summary
                 analysis.provider = config.speech_to_text_provider
+                
+                # 更新 SRT 和時間戳資料
+                if srt_content:
+                    analysis.srt_content = srt_content
+                    analysis.has_timestamps = True
+                
+                if words_data:
+                    analysis.timestamps_data = {
+                        "words": words_data,
+                        "sentence_segments": []
+                    }
+                    analysis.has_timestamps = True
             else:
                 analysis = AnalysisResult(
                     recording_id=uuid.UUID(recording_id),
                     transcription=transcript,
                     summary=summary,
-                    provider=config.speech_to_text_provider
+                    provider=config.speech_to_text_provider,
+                    srt_content=srt_content if srt_content else None,
+                    has_timestamps=has_srt or bool(words_data),
+                    timestamps_data={"words": words_data, "sentence_segments": []} if words_data else None
                 )
                 session.add(analysis)
             
@@ -675,10 +707,17 @@ async def download_recording(
         audio_data = recording.audio_data
         
         # 返回音頻數據
+        # 處理檔案名編碼問題，避免中文字符導致的 latin-1 錯誤
+        import urllib.parse
+        safe_filename = urllib.parse.quote(recording.original_filename.encode('utf-8'))
+        
         return Response(
             content=audio_data,
             media_type=recording.mime_type,
-            headers={"Content-Disposition": f"attachment; filename={recording.original_filename}"}
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}",
+                "Content-Length": str(len(audio_data))
+            }
         )
         
     except HTTPException:

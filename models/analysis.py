@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, Float, ForeignKey, DateTime
+from sqlalchemy import Column, String, Text, Float, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSON
 
@@ -20,6 +20,9 @@ class AnalysisResult(Base):
     processing_time: Mapped[float | None] = mapped_column(Float, nullable=True)  # seconds
     provider: Mapped[str] = mapped_column(String(50), nullable=False)  # openai, deepgram, etc.
     analysis_metadata: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
+    srt_content: Mapped[str | None] = mapped_column(Text, nullable=True)  # SRT 格式字幕內容
+    has_timestamps: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # 是否有時間戳資料
+    timestamps_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 儲存詳細的時間戳資料
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
@@ -28,7 +31,9 @@ class AnalysisResult(Base):
 
     def __init__(self, recording_id: uuid.UUID, transcription: str, summary: str, provider: str, 
                  confidence_score: float | None = None, language: str = 'zh', 
-                 processing_time: float | None = None, analysis_metadata: dict | None = None, **kwargs):
+                 processing_time: float | None = None, analysis_metadata: dict | None = None,
+                 srt_content: str | None = None, has_timestamps: bool = False,
+                 timestamps_data: dict | None = None, **kwargs):
         super().__init__(**kwargs)
         self.recording_id = recording_id
         self.transcription = transcription
@@ -38,6 +43,9 @@ class AnalysisResult(Base):
         self.language = language
         self.processing_time = processing_time
         self.analysis_metadata = analysis_metadata or {}
+        self.srt_content = srt_content
+        self.has_timestamps = has_timestamps
+        self.timestamps_data = timestamps_data or {}
         
     def get_word_count(self) -> int:
         """獲取逐字稿字數"""
@@ -54,7 +62,9 @@ class AnalysisResult(Base):
         return round(self.confidence_score * 100, 1)
         
     def update_analysis(self, transcription: str | None = None, summary: str | None = None, 
-                        confidence_score: float | None = None, analysis_metadata: dict | None = None):
+                        confidence_score: float | None = None, analysis_metadata: dict | None = None,
+                        srt_content: str | None = None, has_timestamps: bool | None = None,
+                        timestamps_data: dict | None = None):
         """更新分析結果"""
         if transcription is not None:
             self.transcription = transcription
@@ -66,6 +76,14 @@ class AnalysisResult(Base):
             if self.analysis_metadata is None: # 確保 analysis_metadata 已初始化
                 self.analysis_metadata = {}
             self.analysis_metadata.update(analysis_metadata)
+        if srt_content is not None:
+            self.srt_content = srt_content
+        if has_timestamps is not None:
+            self.has_timestamps = has_timestamps
+        if timestamps_data is not None:
+            if self.timestamps_data is None:
+                self.timestamps_data = {}
+            self.timestamps_data.update(timestamps_data)
             
         # self.updated_at = datetime.now(timezone.utc) # onupdate 會自動處理
         
@@ -84,6 +102,9 @@ class AnalysisResult(Base):
             'word_count': self.get_word_count(),
             'summary_paragraphs': self.get_summary_paragraphs(),
             'analysis_metadata': self.analysis_metadata if self.analysis_metadata else {},
+            'srt_content': self.srt_content,
+            'has_timestamps': self.has_timestamps,
+            'timestamps_data': self.timestamps_data if self.timestamps_data else {},
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

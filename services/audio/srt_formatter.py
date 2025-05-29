@@ -58,7 +58,8 @@ class SRTFormatter:
     @staticmethod
     def generate_srt_from_words(words: List[Dict[str, Any]], 
                                max_chars_per_line: int = 80,
-                               max_duration: float = 5.0) -> str:
+                               max_duration: float = 5.0,
+                               sentence_level: bool = True) -> str:
         """
         從單詞級時間戳資料生成 SRT 字幕
         
@@ -70,6 +71,7 @@ class SRTFormatter:
                    - speaker: 說話者（可選）
             max_chars_per_line: 每行最大字元數
             max_duration: 單個字幕的最大持續時間（秒）
+            sentence_level: 是否以句子為單位生成字幕塊
             
         Returns:
             完整的 SRT 格式字幕文字
@@ -86,7 +88,10 @@ class SRTFormatter:
             'char_count': 0
         }
         
-        for word_data in words:
+        # 句子結束標點符號
+        sentence_endings = ('。', '！', '？', '.', '!', '?', '；', ';')
+        
+        for i, word_data in enumerate(words):
             word_text = word_data.get('text', '').strip()
             if not word_text:
                 continue
@@ -109,9 +114,6 @@ class SRTFormatter:
                 need_new_subtitle = True
             # 條件4：加上新詞會超過最大字元數
             elif current_subtitle['char_count'] + len(word_text) + 1 > max_chars_per_line:
-                need_new_subtitle = True
-            # 條件5：遇到句號等結束標點
-            elif word_text.endswith(('。', '！', '？', '.', '!', '?')):
                 need_new_subtitle = True
             
             if need_new_subtitle and current_subtitle['text']:
@@ -140,6 +142,54 @@ class SRTFormatter:
                 current_subtitle['speaker'] = speaker
             
             current_subtitle['end'] = word_end
+            
+            # 條件5：如果啟用句子級別，檢查是否遇到句子結束
+            if sentence_level:
+                # 檢查是否應該在此處結束句子
+                should_end_sentence = False
+                
+                # 情況1: 當前詞是句子結束標點
+                if word_text in sentence_endings:
+                    # 檢查下一個詞
+                    if i + 1 < len(words):
+                        next_word = words[i + 1].get('text', '').strip()
+                        # 如果下一個詞不是引號或括號，則結束句子
+                        if next_word and next_word not in ('」', '』', '"', "'", ')', '”', '’'):
+                            should_end_sentence = True
+                    else:
+                        # 是最後一個詞
+                        should_end_sentence = True
+                
+                # 情況2: 當前詞是引號，且前一個詞是句子結束標點
+                elif word_text in ('」', '』', '"', "'", ')', '”', '’') and i > 0:
+                    prev_word = words[i - 1].get('text', '').strip()
+                    if prev_word in sentence_endings:
+                        # 檢查下一個詞
+                        if i + 1 < len(words):
+                            next_word = words[i + 1].get('text', '').strip()
+                            # 如果下一個詞不是繼續的引號，則結束句子
+                            if next_word and next_word not in ('」', '』', '"', "'", ')', '”', '’'):
+                                should_end_sentence = True
+                        else:
+                            # 是最後一個詞
+                            should_end_sentence = True
+                
+                if should_end_sentence and current_subtitle['text']:
+                    # 保存當前字幕
+                    subtitles.append({
+                        'text': ' '.join(current_subtitle['text']),
+                        'start': current_subtitle['start'],
+                        'end': current_subtitle['end'],
+                        'speaker': current_subtitle['speaker']
+                    })
+                    # 重置當前字幕
+                    current_subtitle = {
+                        'text': [],
+                        'start': None,
+                        'end': None,
+                        'speaker': None,
+                        'char_count': 0
+                    }
         
         # 處理最後一個字幕
         if current_subtitle['text']:

@@ -123,7 +123,7 @@ class AsyncDeepgramService:
                     })
                 
                 # 生成 SRT
-                srt_content = SRTFormatter.generate_srt_from_words(words)
+                srt_content = SRTFormatter.generate_srt_from_words(words, sentence_level=True)
             
             # 如果沒有 words 數據但有 utterances，使用 utterances 生成 SRT
             elif utterances:
