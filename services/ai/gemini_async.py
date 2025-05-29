@@ -104,10 +104,8 @@ class AsyncGeminiService:
             prompt = self._build_summary_prompt(text)
             
             config = types.GenerateContentConfig(
-                temperature=0.1,
+                temperature=1,
                 max_output_tokens=60000,
-                top_p=0.8,
-                top_k=10
             )
             
             response = await self._call_gemini_with_rotation(prompt, config)

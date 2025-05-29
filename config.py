@@ -37,7 +37,7 @@ class AppConfig:
     allowed_extensions: List[str]
     
     # 語音轉文字服務配置
-    speech_to_text_provider: str = "openai"
+    speech_to_text_provider: str = "assemblyai"  # 預設使用 AssemblyAI (最佳 SRT 支援)
     whisper_model: str = "whisper-1"
     deepgram_api_keys: List[str] = None
     deepgram_model: str = "nova-2"

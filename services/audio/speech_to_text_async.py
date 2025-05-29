@@ -286,44 +286,50 @@ class AsyncSpeechToTextService:
         """
         使用智能備用方案轉錄音頻
         
-        備用順序：
+        優先使用支援 SRT 格式的服務：
         1. 主要服務 (根據配置)
         2. AssemblyAI (推薦首選 - 最佳 SRT 支援)
-        3. Deepgram (推薦備用 - 速度最快)
-        4. Gemini Audio (如果前兩者都失敗)
-        5. OpenAI Whisper (最後備用方案)
+        3. Deepgram (推薦備用 - 優秀的 SRT 支援)
+        
+        注意：不再使用不支援 SRT 的服務作為備用
         """
         last_error = None
         
         # 1. 嘗試主要服務
         try:
             logger.info(f"🔄 嘗試主要服務: {self.provider}")
-            if self.provider == "openai":
-                result = await self.whisper_service.transcribe(file_path)
-            elif self.provider == "whisper_local" or self.provider == "local_whisper" or self.provider == "faster_whisper":
-                # 如果配置是本地，直接使用 AssemblyAI 替代
-                logger.info("🔄 本地 Whisper 配置，改用 AssemblyAI (推薦)")
+            if self.provider == "assemblyai":
                 result = await self.assemblyai_service.transcribe(file_path)
             elif self.provider == "deepgram":
                 result = await self.deepgram_service.transcribe(file_path)
+            elif self.provider == "openai":
+                # 如果配置是 OpenAI，改用 AssemblyAI
+                logger.warning("⚠️ OpenAI Whisper 不支援 SRT 格式，改用 AssemblyAI")
+                result = await self.assemblyai_service.transcribe(file_path)
+            elif self.provider == "whisper_local" or self.provider == "local_whisper" or self.provider == "faster_whisper":
+                # 如果配置是本地，直接使用 AssemblyAI 替代
+                logger.warning("⚠️ 本地 Whisper 不支援 SRT 格式，改用 AssemblyAI")
+                result = await self.assemblyai_service.transcribe(file_path)
             elif self.provider == "gemini_audio":
-                result = await self._transcribe_with_gemini_no_fallback(file_path)
-            elif self.provider == "assemblyai":
+                # 如果配置是 Gemini，改用 AssemblyAI
+                logger.warning("⚠️ Gemini Audio 不支援 SRT 格式，改用 AssemblyAI")
                 result = await self.assemblyai_service.transcribe(file_path)
             else:
-                raise ValueError(f"不支持的轉錄服務: {self.provider}")
+                # 預設使用 AssemblyAI
+                logger.info(f"🔄 不支援的提供商 {self.provider}，使用 AssemblyAI")
+                result = await self.assemblyai_service.transcribe(file_path)
             
-            logger.info(f"✅ 主要服務 {self.provider} 轉錄成功")
+            logger.info(f"✅ 服務轉錄成功")
             return result
             
         except Exception as e:
             last_error = e
-            logger.warning(f"⚠️ 主要服務 {self.provider} 失敗: {str(e)}")
+            logger.warning(f"⚠️ 主要服務失敗: {str(e)}")
         
-        # 2. 嘗試 AssemblyAI (如果不是主要服務)
-        if self.provider != "assemblyai" and self.assemblyai_service and hasattr(self.assemblyai_service, 'api_keys') and self.assemblyai_service.api_keys:
+        # 2. 嘗試 AssemblyAI 作為備用 (如果還未嘗試)
+        if self.assemblyai_service and hasattr(self.assemblyai_service, 'api_keys') and self.assemblyai_service.api_keys:
             try:
-                logger.info("🔄 嘗試推薦服務: AssemblyAI (最佳 SRT 支援)")
+                logger.info("🔄 嘗試備用服務: AssemblyAI (最佳 SRT 支援)")
                 result = await self.assemblyai_service.transcribe(file_path)
                 result['backup_provider'] = 'assemblyai'
                 logger.info("✅ AssemblyAI 轉錄成功")
@@ -332,10 +338,10 @@ class AsyncSpeechToTextService:
                 last_error = e
                 logger.warning(f"⚠️ AssemblyAI 服務失敗: {str(e)}")
         
-        # 3. 嘗試 Deepgram (如果不是主要服務)
-        if self.provider != "deepgram" and self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
+        # 3. 嘗試 Deepgram 作為最後備用
+        if self.deepgram_service and hasattr(self.deepgram_service, 'api_keys') and self.deepgram_service.api_keys:
             try:
-                logger.info("🔄 嘗試備用服務: Deepgram (速度最快)")
+                logger.info("🔄 嘗試最後備用: Deepgram (優秀的 SRT 支援)")
                 result = await self.deepgram_service.transcribe(file_path)
                 result['backup_provider'] = 'deepgram'
                 logger.info("✅ Deepgram 備用轉錄成功")
@@ -344,32 +350,8 @@ class AsyncSpeechToTextService:
                 last_error = e
                 logger.warning(f"⚠️ Deepgram 備用服務失敗: {str(e)}")
         
-        # 4. 嘗試 Gemini Audio (如果不是主要服務)
-        if self.provider != "gemini_audio" and self.gemini_audio_service and hasattr(self.gemini_audio_service, 'api_keys') and self.gemini_audio_service.api_keys:
-            try:
-                logger.info("🔄 嘗試備用服務: Gemini Audio")
-                result = await self.gemini_audio_service.transcribe(file_path)
-                result['backup_provider'] = 'gemini_audio'
-                logger.info("✅ Gemini Audio 備用轉錄成功")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ Gemini Audio 備用服務失敗: {str(e)}")
-        
-        # 5. 最後嘗試 OpenAI Whisper
-        if self.provider != "openai" and self.whisper_service and hasattr(self.whisper_service, 'api_key') and self.whisper_service.api_key:
-            try:
-                logger.info("🔄 嘗試最後備用: OpenAI Whisper")
-                result = await self.whisper_service.transcribe(file_path)
-                result['backup_provider'] = 'openai_whisper'
-                logger.info("✅ OpenAI Whisper 備用轉錄成功")
-                return result
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ OpenAI Whisper 備用服務也失敗: {str(e)}")
-        
-        # 所有服務都失敗
-        raise Exception(f"所有轉錄服務都失敗，最後錯誤: {str(last_error)}")
+        # 所有支援 SRT 的服務都失敗
+        raise Exception(f"所有支援 SRT 格式的轉錄服務都失敗，最後錯誤: {str(last_error)}")
     
     async def _transcribe_with_gemini_no_fallback(self, file_path: str) -> Dict[str, Any]:
         """使用 Gemini Audio SDK 轉錄，但不自動嘗試本地備用"""
