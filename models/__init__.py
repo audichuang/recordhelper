@@ -55,7 +55,6 @@ async def close_async_db():
 # 導入所有模型
 from .user import User
 from .recording import Recording, RecordingStatus
-from .analysis import AnalysisResult
 from .analysis_history import AnalysisHistory, AnalysisType, AnalysisStatus
 
 __all__ = [
@@ -66,8 +65,8 @@ __all__ = [
     'User', 
     'Recording', 
     'RecordingStatus',
-    'AnalysisResult',
     'AnalysisHistory',
     'AnalysisType',
-    'AnalysisStatus'
+    'AnalysisStatus',
+    'AsyncSessionLocal'
 ] 

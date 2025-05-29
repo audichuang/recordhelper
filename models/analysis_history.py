@@ -42,7 +42,7 @@ class AnalysisHistory(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # 關聯關係
-    recording: Mapped["Recording"] = relationship("Recording", lazy="selectin")
+    recording: Mapped["Recording"] = relationship("Recording", back_populates="analysis_histories", lazy="selectin")
 
     def __init__(self, recording_id: uuid.UUID, analysis_type: AnalysisType, content: str, 
                  provider: str, version: int = 1, confidence_score: float | None = None, 

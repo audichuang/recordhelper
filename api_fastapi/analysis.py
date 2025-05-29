@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, desc
 
-from models import User, Recording, AnalysisResult, AnalysisHistory, AnalysisType, AnalysisStatus, get_async_db_session
+from models import User, Recording, AnalysisHistory, AnalysisType, AnalysisStatus, get_async_db_session
 from .auth import get_current_user
 from services.audio.speech_to_text_async import AsyncSpeechToTextService
 from services.ai.gemini_async import AsyncGeminiService
@@ -79,30 +79,25 @@ async def get_analysis(
                 detail="沒有權限訪問此錄音分析"
             )
         
-        # 獲取分析結果
-        analysis_result = await db.execute(
-            select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
-        )
-        analysis = analysis_result.scalars().first()
-        
-        if not analysis:
+        # 檢查是否有分析結果
+        if not recording.has_analysis():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="分析結果不存在"
             )
         
         return AnalysisResponse(
-            id=str(analysis.id),
-            recording_id=str(analysis.recording_id),
-            transcription=analysis.transcription,
-            summary=analysis.summary,
-            provider=analysis.provider or "",
-            created_at=analysis.created_at.isoformat() if analysis.created_at else None,
-            updated_at=analysis.updated_at.isoformat() if analysis.updated_at else None,
-            metadata=analysis.analysis_metadata,
-            srt_content=analysis.srt_content,
-            has_timestamps=analysis.has_timestamps,
-            timestamps_data=analysis.timestamps_data
+            id=str(recording.id),  # 使用錄音ID作為分析ID
+            recording_id=str(recording.id),
+            transcription=recording.transcription or "",
+            summary=recording.summary or "",
+            provider=recording.provider or "",
+            created_at=recording.created_at.isoformat() if recording.created_at else None,
+            updated_at=recording.updated_at.isoformat() if recording.updated_at else None,
+            metadata=recording.analysis_metadata,
+            srt_content=recording.srt_content,
+            has_timestamps=recording.has_timestamps,
+            timestamps_data=recording.timestamps_data
         )
         
     except HTTPException:
@@ -220,12 +215,7 @@ async def regenerate_summary(
             )
         
         # 檢查是否有當前的逐字稿
-        current_analysis = await db.execute(
-            select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
-        )
-        analysis = current_analysis.scalars().first()
-        
-        if not analysis or not analysis.transcription:
+        if not recording.transcription:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="需要先有逐字稿才能生成摘要"
@@ -259,7 +249,7 @@ async def regenerate_summary(
         background_tasks.add_task(
             process_summary,
             str(history.id),
-            analysis.transcription,
+            recording.transcription,
             request.provider or "gemini"
         )
         
@@ -437,33 +427,26 @@ async def process_transcription(history_id: str, audio_data: bytes, provider: st
                 # 設置為當前版本
                 history.set_as_current()
                 
-                # 更新主分析結果
-                analysis_result = await db.execute(
-                    select(AnalysisResult).where(AnalysisResult.recording_id == history.recording_id)
+                # 更新主錄音記錄的分析結果
+                recording_result = await db.execute(
+                    select(Recording).where(Recording.id == history.recording_id)
                 )
-                analysis = analysis_result.scalars().first()
+                recording = recording_result.scalars().first()
                 
-                if analysis:
-                    analysis.transcription = history.content
-                    analysis.confidence_score = history.confidence_score
-                    analysis.processing_time = history.processing_time
-                    analysis.provider = history.provider
-                    analysis.analysis_metadata = history.analysis_metadata
+                if recording:
+                    recording.update_transcription(
+                        transcription=history.content,
+                        provider=history.provider,
+                        confidence_score=history.confidence_score,
+                        processing_time=history.processing_time,
+                        metadata=history.analysis_metadata,
+                        srt_content=srt_content if srt_content else None,
+                        has_timestamps=has_srt or bool(words_data),
+                        timestamps_data={"words": words_data, "sentence_segments": []} if words_data else None
+                    )
                     
-                    # 更新 SRT 和時間戳資料
-                    if srt_content:
-                        analysis.srt_content = srt_content
-                        analysis.has_timestamps = True
-                    
-                    if words_data:
-                        analysis.timestamps_data = {
-                            "words": words_data,
-                            "sentence_segments": []
-                        }
-                        analysis.has_timestamps = True
-                    
-                    db.add(analysis)  # 確保變更被追蹤
-                    logger.info(f"更新分析結果，轉錄長度: {len(analysis.transcription)}")
+                    db.add(recording)  # 確保變更被追蹤
+                    logger.info(f"更新錄音記錄，轉錄長度: {len(recording.transcription)}")
                     if srt_content:
                         logger.info(f"SRT 內容已儲存，長度: {len(srt_content)}")
                 
@@ -537,19 +520,21 @@ async def process_summary(history_id: str, transcription: str, provider: str):
                 # 設置為當前版本
                 history.set_as_current()
                 
-                # 更新主分析結果
-                analysis_result = await db.execute(
-                    select(AnalysisResult).where(AnalysisResult.recording_id == history.recording_id)
+                # 更新主錄音記錄的摘要
+                recording_result = await db.execute(
+                    select(Recording).where(Recording.id == history.recording_id)
                 )
-                analysis = analysis_result.scalars().first()
+                recording = recording_result.scalars().first()
                 
-                if analysis:
-                    analysis.summary = history.content
-                    analysis.processing_time = history.processing_time
-                    analysis.provider = history.provider
-                    analysis.analysis_metadata = history.analysis_metadata
-                    db.add(analysis)  # 確保變更被追蹤
-                    logger.info(f"更新分析結果，摘要長度: {len(analysis.summary)}")
+                if recording:
+                    recording.update_summary(
+                        summary=history.content,
+                        provider=history.provider,
+                        processing_time=history.processing_time,
+                        metadata=history.analysis_metadata
+                    )
+                    db.add(recording)  # 確保變更被追蹤
+                    logger.info(f"更新錄音記錄，摘要長度: {len(recording.summary)}")
                 
                 await db.commit()
                 logger.info(f"摘要生成完成: {history_id}")

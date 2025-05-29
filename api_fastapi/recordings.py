@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 from sqlalchemy import desc
 from sqlalchemy.sql import func
 
-from models import User, Recording, AnalysisResult, get_async_db_session, RecordingStatus, AnalysisHistory
+from models import User, Recording, get_async_db_session, RecordingStatus, AnalysisHistory, AnalysisType
 from .auth import get_current_user
 from services.audio.speech_to_text_async import AsyncSpeechToTextService
 from services.ai.gemini_async import AsyncGeminiService
@@ -182,12 +182,6 @@ async def get_recordings(
         
         recording_responses = []
         for recording in recordings:
-            # 獲取相關的分析數據
-            analysis_result = await db.execute(
-                select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
-            )
-            analysis = analysis_result.scalars().first()
-            
             recording_responses.append(RecordingResponse(
                 id=str(recording.id),
                 title=recording.title,
@@ -195,15 +189,15 @@ async def get_recordings(
                 file_size=recording.file_size,
                 status=recording.status.value if hasattr(recording.status, 'value') else recording.status,
                 created_at=recording.created_at.isoformat() if recording.created_at else None,
-                transcript=analysis.transcription if analysis else None,
-                summary=analysis.summary if analysis else None,
+                transcript=recording.transcription,
+                summary=recording.summary,
                 original_filename=recording.original_filename,
                 format=recording.format,
                 mime_type=recording.mime_type,
                 # SRT 相關欄位
-                srt_content=analysis.srt_content if analysis else None,
-                has_timestamps=analysis.has_timestamps if analysis else False,
-                timestamps_data=analysis.timestamps_data if analysis else None
+                srt_content=recording.srt_content,
+                has_timestamps=recording.has_timestamps,
+                timestamps_data=recording.timestamps_data
             ))
         
         return RecordingList(
@@ -251,26 +245,9 @@ async def get_recordings_summary(
         
         recording_summaries = []
         for recording in recordings:
-            # 檢查是否有分析結果（不需要獲取完整內容）
-            analysis_result = await db.execute(
-                select(func.count(AnalysisResult.id)).where(AnalysisResult.recording_id == recording.id)
-            )
-            has_analysis = (analysis_result.scalar() or 0) > 0
-            
-            # 檢查分析結果是否有轉錄和摘要
-            if has_analysis:
-                analysis_check = await db.execute(
-                    select(
-                        func.length(AnalysisResult.transcription).label('transcript_length'),
-                        func.length(AnalysisResult.summary).label('summary_length')
-                    ).where(AnalysisResult.recording_id == recording.id)
-                )
-                lengths = analysis_check.first()
-                has_transcript = lengths and (lengths.transcript_length or 0) > 0
-                has_summary = lengths and (lengths.summary_length or 0) > 0
-            else:
-                has_transcript = False
-                has_summary = False
+            # 直接檢查錄音記錄中的分析結果
+            has_transcript = bool(recording.transcription and len(recording.transcription) > 0)
+            has_summary = bool(recording.summary and len(recording.summary) > 0)
             
             recording_summaries.append(RecordingSummary(
                 id=str(recording.id),
@@ -324,19 +301,12 @@ async def get_recording(
                 detail="沒有權限訪問此錄音"
             )
         
-        # 獲取分析數據
-        analysis_result = await db.execute(
-            select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
-        )
-        analysis = analysis_result.scalars().first()
-        
         # 從分析元數據中提取時間軸資訊
         timeline_transcript = None
         has_timeline = False
-        analysis_metadata = None
+        analysis_metadata = recording.analysis_metadata
         
-        if analysis and analysis.analysis_metadata:
-            analysis_metadata = analysis.analysis_metadata
+        if analysis_metadata:
             has_timeline = analysis_metadata.get("has_timeline", False)
             if has_timeline:
                 timeline_transcript = analysis_metadata.get("timeline_transcript", None)
@@ -348,8 +318,8 @@ async def get_recording(
             file_size=recording.file_size,
             status=recording.status.value if hasattr(recording.status, 'value') else recording.status,
             created_at=recording.created_at.isoformat() if recording.created_at else None,
-            transcript=analysis.transcription if analysis else None,
-            summary=analysis.summary if analysis else None,
+            transcript=recording.transcription,
+            summary=recording.summary,
             original_filename=recording.original_filename,
             format=recording.format,
             mime_type=recording.mime_type,
@@ -357,9 +327,9 @@ async def get_recording(
             has_timeline=has_timeline,
             analysis_metadata=analysis_metadata,
             # 添加 SRT 相關欄位
-            srt_content=analysis.srt_content if analysis else None,
-            has_timestamps=analysis.has_timestamps if analysis else False,
-            timestamps_data=analysis.timestamps_data if analysis else None
+            srt_content=recording.srt_content,
+            has_timestamps=recording.has_timestamps,
+            timestamps_data=recording.timestamps_data
         )
         
     except HTTPException:
@@ -469,16 +439,7 @@ async def delete_recording(
             await db.delete(history)
             logger.info(f"  - 刪除分析歷史記錄: {history.id}")
         
-        # 2. 刪除相關的分析結果
-        analysis_result = await db.execute(
-            select(AnalysisResult).where(AnalysisResult.recording_id == recording.id)
-        )
-        analysis = analysis_result.scalars().first()
-        if analysis:
-            await db.delete(analysis)
-            logger.info(f"  - 刪除分析結果: {analysis.id}")
-        
-        # 3. 刪除錄音（連同音頻數據）
+        # 2. 刪除錄音（連同音頻數據和分析結果）
         await db.delete(recording)
         await db.commit()
         
@@ -569,48 +530,59 @@ async def process_recording_async(recording_id: str):
             if recording:
                 recording.duration = duration
                 recording.status = RecordingStatus.COMPLETED
-                await session.commit()
-            
-            # 創建或更新分析結果
-            result = await session.execute(
-                select(AnalysisResult).where(AnalysisResult.recording_id == uuid.UUID(recording_id))
-            )
-            analysis = result.scalars().first()
-            
-            # 提取 SRT 和時間戳資料 (從 transcription_result，不是從 result)
-            srt_content = transcription_result.get('srt', '')
-            has_srt = transcription_result.get('has_srt', False)
-            words_data = transcription_result.get('words', [])
-            
-            if analysis:
-                analysis.transcription = transcript
-                analysis.summary = summary
-                analysis.provider = config.speech_to_text_provider
+                
+                # 直接更新錄音記錄中的分析結果
+                recording.transcription = transcript
+                recording.summary = summary
+                recording.provider = config.speech_to_text_provider
+                recording.transcription_version = 1
+                recording.summary_version = 1
+                
+                # 提取 SRT 和時間戳資料
+                srt_content = transcription_result.get('srt', '')
+                has_srt = transcription_result.get('has_srt', False)
+                words_data = transcription_result.get('words', [])
                 
                 # 更新 SRT 和時間戳資料
                 if srt_content:
-                    analysis.srt_content = srt_content
-                    analysis.has_timestamps = True
+                    recording.srt_content = srt_content
+                    recording.has_timestamps = True
                 
                 if words_data:
-                    analysis.timestamps_data = {
+                    recording.timestamps_data = {
                         "words": words_data,
                         "sentence_segments": []
                     }
-                    analysis.has_timestamps = True
-            else:
-                analysis = AnalysisResult(
+                    recording.has_timestamps = True
+                
+                # 同時創建歷史記錄
+                # 創建逐字稿歷史記錄
+                transcription_history = AnalysisHistory(
                     recording_id=uuid.UUID(recording_id),
-                    transcription=transcript,
-                    summary=summary,
+                    analysis_type=AnalysisType.TRANSCRIPTION,
+                    content=transcript,
                     provider=config.speech_to_text_provider,
-                    srt_content=srt_content if srt_content else None,
-                    has_timestamps=has_srt or bool(words_data),
-                    timestamps_data={"words": words_data, "sentence_segments": []} if words_data else None
+                    version=1,
+                    is_current=True,
+                    confidence_score=transcription_result.get('confidence'),
+                    processing_time=transcription_result.get('processing_time')
                 )
-                session.add(analysis)
-            
-            await session.commit()
+                transcription_history.mark_as_completed()
+                session.add(transcription_history)
+                
+                # 創建摘要歷史記錄
+                summary_history = AnalysisHistory(
+                    recording_id=uuid.UUID(recording_id),
+                    analysis_type=AnalysisType.SUMMARY,
+                    content=summary,
+                    provider='gemini',
+                    version=1,
+                    is_current=True
+                )
+                summary_history.mark_as_completed()
+                session.add(summary_history)
+                
+                await session.commit()
         
         logger.info(f"✅ 錄音 {recording_id} 處理完成")
         
