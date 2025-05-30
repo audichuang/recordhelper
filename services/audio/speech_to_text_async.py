@@ -96,7 +96,9 @@ class AsyncSpeechToTextService:
             with av.open(audio_buffer) as container:
                 if container.streams.audio:
                     audio_stream = container.streams.audio[0]
-                    duration = float(container.duration) / av.time_base if container.duration else None
+                    # container.duration is in AV_TIME_BASE units (microseconds)
+                    # Convert to seconds by dividing by 1,000,000
+                    duration = float(container.duration) / 1000000 if container.duration else None
                     if duration:
                         logger.info(f"🕒 音頻時長: {duration:.2f}秒")
                         return duration
@@ -131,7 +133,9 @@ class AsyncSpeechToTextService:
             with av.open(audio_path) as container:
                 if container.streams.audio:
                     audio_stream = container.streams.audio[0]
-                    duration = float(container.duration) / av.time_base if container.duration else None
+                    # container.duration is in AV_TIME_BASE units (microseconds)
+                    # Convert to seconds by dividing by 1,000,000
+                    duration = float(container.duration) / 1000000 if container.duration else None
                     if duration:
                         logger.info(f"🕒 音頻時長: {duration:.2f}秒")
                         return duration
