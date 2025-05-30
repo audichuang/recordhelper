@@ -338,6 +338,100 @@ async def get_analysis_history(
         )
 
 
+@analysis_router.post("/history/{history_id}/set-current")
+async def set_history_as_current(
+    history_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """設置特定的歷史記錄為當前版本"""
+    try:
+        # 獲取歷史記錄
+        history_result = await db.execute(
+            select(AnalysisHistory).where(AnalysisHistory.id == uuid.UUID(history_id))
+        )
+        history = history_result.scalars().first()
+        
+        if not history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="歷史記錄不存在"
+            )
+        
+        # 檢查錄音權限
+        recording_result = await db.execute(
+            select(Recording).where(Recording.id == history.recording_id)
+        )
+        recording = recording_result.scalars().first()
+        
+        if not recording or recording.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="沒有權限修改此歷史記錄"
+            )
+        
+        # 檢查歷史記錄狀態
+        if history.status != AnalysisStatus.COMPLETED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="只能將已完成的歷史記錄設為當前版本"
+            )
+        
+        # 取消舊的current標記
+        old_histories = await db.execute(
+            select(AnalysisHistory).where(
+                AnalysisHistory.recording_id == history.recording_id,
+                AnalysisHistory.analysis_type == history.analysis_type,
+                AnalysisHistory.is_current == True,
+                AnalysisHistory.id != history.id
+            )
+        )
+        for old_history in old_histories.scalars():
+            old_history.unset_as_current()
+            db.add(old_history)
+        
+        # 設置為當前版本
+        history.set_as_current()
+        db.add(history)
+        
+        # 更新主錄音記錄
+        if history.analysis_type == AnalysisType.TRANSCRIPTION:
+            recording.update_transcription(
+                transcription=history.content,
+                provider=history.provider,
+                confidence_score=history.confidence_score,
+                processing_time=history.processing_time,
+                metadata=history.analysis_metadata
+            )
+        elif history.analysis_type == AnalysisType.SUMMARY:
+            recording.update_summary(
+                summary=history.content,
+                provider=history.provider,
+                processing_time=history.processing_time,
+                metadata=history.analysis_metadata
+            )
+        
+        db.add(recording)
+        await db.commit()
+        
+        return {
+            "message": "成功設置為當前版本",
+            "history_id": str(history.id),
+            "recording_id": str(recording.id),
+            "analysis_type": history.analysis_type.value,
+            "version": history.version
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"設置當前版本錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="設置當前版本失敗"
+        )
+
+
 async def process_transcription(history_id: str, audio_data: bytes, provider: str):
     """背景任務：處理轉錄"""
     try:
