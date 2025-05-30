@@ -308,6 +308,9 @@ class AsyncAssemblyAIService:
                     duration_ms = result.get('audio_duration', 0)
                     duration = duration_ms / 1000 if duration_ms else None
                     
+                    # 調試信息
+                    logger.info(f"🔍 AssemblyAI 原始時長數據: audio_duration={duration_ms}ms, 轉換後={duration}s")
+                    
                     # 處理單詞時間戳
                     words = []
                     if result.get('words'):

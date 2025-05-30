@@ -162,7 +162,7 @@ async def regenerate_transcription(
         await db.commit()
         await db.refresh(history)
         
-        # 背景任務處理轉錄
+        # 背景任務處理轉錄（不發送開始通知）
         background_tasks.add_task(
             process_transcription,
             str(history.id),
@@ -245,7 +245,7 @@ async def regenerate_summary(
         await db.commit()
         await db.refresh(history)
         
-        # 背景任務處理摘要生成
+        # 背景任務處理摘要生成（不發送開始通知）
         background_tasks.add_task(
             process_summary,
             str(history.id),
@@ -547,10 +547,39 @@ async def process_transcription(history_id: str, audio_data: bytes, provider: st
                 await db.commit()
                 logger.info(f"轉錄完成: {history_id}")
                 
+                # 發送重新生成完成通知
+                from .recordings import send_push_notification_for_recording
+                await send_push_notification_for_recording(
+                    db,
+                    recording.user_id,
+                    str(recording.id),
+                    recording.title,
+                    notification_type="regeneration_update",
+                    analysis_type="transcription",
+                    regeneration_status="completed"
+                )
+                
             except Exception as e:
                 history.mark_as_failed(str(e))
                 await db.commit()
                 logger.error(f"轉錄失敗: {history_id}, 錯誤: {str(e)}")
+                
+                # 發送重新生成失敗通知
+                from .recordings import send_push_notification_for_recording
+                recording_result = await db.execute(
+                    select(Recording).where(Recording.id == history.recording_id)
+                )
+                recording = recording_result.scalars().first()
+                if recording:
+                    await send_push_notification_for_recording(
+                        db,
+                        recording.user_id,
+                        str(recording.id),
+                        recording.title,
+                        notification_type="regeneration_update",
+                        analysis_type="transcription",
+                        regeneration_status="failed"
+                    )
                 
     except Exception as e:
         logger.error(f"處理轉錄背景任務錯誤: {str(e)}")
@@ -633,10 +662,39 @@ async def process_summary(history_id: str, transcription: str, provider: str):
                 await db.commit()
                 logger.info(f"摘要生成完成: {history_id}")
                 
+                # 發送重新生成完成通知
+                from .recordings import send_push_notification_for_recording
+                await send_push_notification_for_recording(
+                    db,
+                    recording.user_id,
+                    str(recording.id),
+                    recording.title,
+                    notification_type="regeneration_update",
+                    analysis_type="summary",
+                    regeneration_status="completed"
+                )
+                
             except Exception as e:
                 history.mark_as_failed(str(e))
                 await db.commit()
                 logger.error(f"摘要生成失敗: {history_id}, 錯誤: {str(e)}")
+                
+                # 發送重新生成失敗通知
+                from .recordings import send_push_notification_for_recording
+                recording_result = await db.execute(
+                    select(Recording).where(Recording.id == history.recording_id)
+                )
+                recording = recording_result.scalars().first()
+                if recording:
+                    await send_push_notification_for_recording(
+                        db,
+                        recording.user_id,
+                        str(recording.id),
+                        recording.title,
+                        notification_type="regeneration_update",
+                        analysis_type="summary",
+                        regeneration_status="failed"
+                    )
                 
     except Exception as e:
         logger.error(f"處理摘要生成背景任務錯誤: {str(e)}") 

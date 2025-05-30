@@ -170,25 +170,59 @@ class APNSService:
             logger.error(f"❌ 發送推送通知時發生錯誤: {str(e)}")
             return False
             
-    async def send_recording_completed_notification(
+    async def send_transcription_completed_notification(
         self,
         device_token: str,
         recording_id: str,
         recording_title: str,
         has_error: bool = False
     ):
-        """發送錄音處理完成通知"""
+        """發送逐字稿完成通知"""
         if has_error:
-            title = "處理失敗"
-            body = f"「{recording_title}」的分析處理失敗，請重試"
+            title = "逐字稿處理失敗"
+            body = f"「{recording_title}」的逐字稿生成失敗，請重試"
+            status = "transcription_failed"
         else:
-            title = "分析完成"
-            body = f"「{recording_title}」的逐字稿和摘要已經生成完成"
+            title = "逐字稿完成"
+            body = f"「{recording_title}」的逐字稿已生成，正在生成摘要..."
+            status = "transcription_completed"
             
         data = {
-            "type": "recording_completed",
+            "type": "transcription_update",
             "recordingId": recording_id,
-            "status": "failed" if has_error else "completed"
+            "status": status
+        }
+        
+        return await self.send_notification(
+            device_token=device_token,
+            title=title,
+            body=body,
+            data=data,
+            sound="default" if not has_error else "error.wav",
+            thread_id=f"recording-{recording_id}"
+        )
+    
+    async def send_summary_completed_notification(
+        self,
+        device_token: str,
+        recording_id: str,
+        recording_title: str,
+        has_error: bool = False
+    ):
+        """發送摘要完成通知"""
+        if has_error:
+            title = "摘要處理失敗"
+            body = f"「{recording_title}」的摘要生成失敗，但逐字稿可用"
+            status = "summary_failed"
+        else:
+            title = "處理完成"
+            body = f"「{recording_title}」的逐字稿和摘要已全部完成"
+            status = "all_completed"
+            
+        data = {
+            "type": "summary_update",
+            "recordingId": recording_id,
+            "status": status
         }
         
         return await self.send_notification(
@@ -198,6 +232,52 @@ class APNSService:
             data=data,
             sound="success.wav" if not has_error else "error.wav",
             thread_id=f"recording-{recording_id}"
+        )
+
+    async def send_regeneration_notification(
+        self,
+        device_token: str,
+        recording_id: str,
+        recording_title: str,
+        analysis_type: str,  # "transcription" or "summary"
+        status: str,  # "completed", "failed" (不再支援 "started")
+    ):
+        """發送重新生成通知（僅完成和失敗狀態）"""
+        type_name = "逐字稿" if analysis_type == "transcription" else "摘要"
+        
+        if status == "completed":
+            title = f"{type_name}更新完成"
+            body = f"「{recording_title}」的{type_name}已重新生成完成"
+        else:  # failed
+            title = f"{type_name}生成失敗"
+            body = f"「{recording_title}」的{type_name}重新生成失敗，請重試"
+            
+        data = {
+            "type": "regeneration_update",
+            "recordingId": recording_id,
+            "analysisType": analysis_type,
+            "status": status
+        }
+        
+        return await self.send_notification(
+            device_token=device_token,
+            title=title,
+            body=body,
+            data=data,
+            sound="success.wav" if status == "completed" else "error.wav",
+            thread_id=f"recording-{recording_id}"
+        )
+    
+    async def send_recording_completed_notification(
+        self,
+        device_token: str,
+        recording_id: str,
+        recording_title: str,
+        has_error: bool = False
+    ):
+        """發送錄音處理完成通知（向後兼容）"""
+        return await self.send_summary_completed_notification(
+            device_token, recording_id, recording_title, has_error
         )
         
     async def send_batch_notifications(

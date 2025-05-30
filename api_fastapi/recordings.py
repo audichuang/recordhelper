@@ -30,9 +30,12 @@ async def send_push_notification_for_recording(
     user_id: uuid.UUID,
     recording_id: str,
     recording_title: str,
-    has_error: bool = False
+    notification_type: str,  # "transcription_completed", "summary_completed", "regeneration_update"
+    has_error: bool = False,
+    analysis_type: str = None,  # "transcription" or "summary" for regeneration
+    regeneration_status: str = None  # "completed", "failed" for regeneration (不再支援 "started")
 ):
-    """發送錄音處理完成的推送通知"""
+    """發送錄音相關的推送通知"""
     try:
         # 獲取用戶的所有活躍設備 Token
         result = await session.execute(
@@ -50,12 +53,38 @@ async def send_push_notification_for_recording(
         
         # 發送推送通知到每個設備
         for token in device_tokens:
-            success = await apns_service.send_recording_completed_notification(
-                device_token=token.token,
-                recording_id=recording_id,
-                recording_title=recording_title,
-                has_error=has_error
-            )
+            success = False
+            
+            if notification_type == "transcription_completed":
+                success = await apns_service.send_transcription_completed_notification(
+                    device_token=token.token,
+                    recording_id=recording_id,
+                    recording_title=recording_title,
+                    has_error=has_error
+                )
+            elif notification_type == "summary_completed":
+                success = await apns_service.send_summary_completed_notification(
+                    device_token=token.token,
+                    recording_id=recording_id,
+                    recording_title=recording_title,
+                    has_error=has_error
+                )
+            elif notification_type == "regeneration_update":
+                success = await apns_service.send_regeneration_notification(
+                    device_token=token.token,
+                    recording_id=recording_id,
+                    recording_title=recording_title,
+                    analysis_type=analysis_type,
+                    status=regeneration_status
+                )
+            else:
+                # 向後兼容
+                success = await apns_service.send_recording_completed_notification(
+                    device_token=token.token,
+                    recording_id=recording_id,
+                    recording_title=recording_title,
+                    has_error=has_error
+                )
             
             if success:
                 # 更新最後使用時間
@@ -504,7 +533,7 @@ async def delete_recording(
 
 
 async def process_recording_async(recording_id: str):
-    """異步處理錄音文件（語音轉文字和摘要生成）"""
+    """異步處理錄音文件（分階段：語音轉文字 -> 摘要生成）"""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from config import AppConfig
     
@@ -512,8 +541,10 @@ async def process_recording_async(recording_id: str):
     engine = create_async_engine(config.database_url)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
     
+    recording = None
+    
     try:
-        # 更新錄音狀態為處理中
+        # 階段1：更新錄音狀態為逐字稿處理中
         async with async_session() as session:
             result = await session.execute(
                 select(Recording).where(Recording.id == uuid.UUID(recording_id))
@@ -524,14 +555,14 @@ async def process_recording_async(recording_id: str):
                 logger.error(f"❓ 找不到錄音: {recording_id}")
                 return
             
-            recording.status = RecordingStatus.PROCESSING
+            recording.status = RecordingStatus.TRANSCRIBING
             await session.commit()
         
         # 初始化服務
         stt_service = AsyncSpeechToTextService(config)
         ai_service = AsyncGeminiService(config)
         
-        # 語音轉文字
+        # 階段2：語音轉文字
         logger.info(f"🎙️ 開始處理錄音 {recording_id} 的語音轉文字")
         try:
             transcription_result = await stt_service.transcribe_audio_data(
@@ -556,19 +587,20 @@ async def process_recording_async(recording_id: str):
                 recording = result.scalars().first()
                 recording.status = RecordingStatus.FAILED
                 await session.commit()
+                
+                # 發送逐字稿失敗通知
+                await send_push_notification_for_recording(
+                    session,
+                    recording.user_id,
+                    recording_id,
+                    recording.title,
+                    notification_type="transcription_completed",
+                    has_error=True
+                )
             return
         
-        # 生成摘要
-        logger.info(f"📝 開始為錄音 {recording_id} 生成摘要")
-        try:
-            summary = await ai_service.generate_summary(transcript)
-        except Exception as e:
-            logger.error(f"❌ 摘要生成失敗: {str(e)}")
-            summary = "摘要生成失敗，但錄音轉文字成功。請查看逐字稿。"
-        
-        # 更新數據庫
+        # 階段3：更新逐字稿完成狀態並發送通知
         async with async_session() as session:
-            # 更新錄音記錄
             result = await session.execute(
                 select(Recording).where(Recording.id == uuid.UUID(recording_id))
             )
@@ -576,14 +608,10 @@ async def process_recording_async(recording_id: str):
             
             if recording:
                 recording.duration = duration
-                recording.status = RecordingStatus.COMPLETED
-                
-                # 直接更新錄音記錄中的分析結果
+                recording.status = RecordingStatus.TRANSCRIBED  # 逐字稿完成，準備生成摘要
                 recording.transcription = transcript
-                recording.summary = summary
                 recording.provider = config.speech_to_text_provider
                 recording.transcription_version = 1
-                recording.summary_version = 1
                 
                 # 提取 SRT 和時間戳資料
                 srt_content = transcription_result.get('srt', '')
@@ -602,7 +630,6 @@ async def process_recording_async(recording_id: str):
                     }
                     recording.has_timestamps = True
                 
-                # 同時創建歷史記錄
                 # 創建逐字稿歷史記錄
                 transcription_history = AnalysisHistory(
                     recording_id=uuid.UUID(recording_id),
@@ -617,6 +644,49 @@ async def process_recording_async(recording_id: str):
                 transcription_history.mark_as_completed()
                 session.add(transcription_history)
                 
+                await session.commit()
+                
+                # 發送逐字稿完成通知
+                await send_push_notification_for_recording(
+                    session,
+                    recording.user_id,
+                    recording_id,
+                    recording.title,
+                    notification_type="transcription_completed",
+                    has_error=False
+                )
+        
+        # 階段4：更新狀態為摘要處理中
+        async with async_session() as session:
+            result = await session.execute(
+                select(Recording).where(Recording.id == uuid.UUID(recording_id))
+            )
+            recording = result.scalars().first()
+            recording.status = RecordingStatus.SUMMARIZING
+            await session.commit()
+        
+        # 階段5：生成摘要
+        logger.info(f"📝 開始為錄音 {recording_id} 生成摘要")
+        summary_error = False
+        try:
+            summary = await ai_service.generate_summary(transcript)
+        except Exception as e:
+            logger.error(f"❌ 摘要生成失敗: {str(e)}")
+            summary = "摘要生成失敗，但錄音轉文字成功。請查看逐字稿。"
+            summary_error = True
+        
+        # 階段6：完成所有處理並發送最終通知
+        async with async_session() as session:
+            result = await session.execute(
+                select(Recording).where(Recording.id == uuid.UUID(recording_id))
+            )
+            recording = result.scalars().first()
+            
+            if recording:
+                recording.status = RecordingStatus.COMPLETED
+                recording.summary = summary
+                recording.summary_version = 1
+                
                 # 創建摘要歷史記錄
                 summary_history = AnalysisHistory(
                     recording_id=uuid.UUID(recording_id),
@@ -626,18 +696,22 @@ async def process_recording_async(recording_id: str):
                     version=1,
                     is_current=True
                 )
-                summary_history.mark_as_completed()
+                if summary_error:
+                    summary_history.mark_as_failed("摘要生成失敗")
+                else:
+                    summary_history.mark_as_completed()
                 session.add(summary_history)
                 
                 await session.commit()
                 
-                # 發送推送通知
+                # 發送摘要完成通知（即全部完成通知）
                 await send_push_notification_for_recording(
                     session,
                     recording.user_id,
                     recording_id,
                     recording.title,
-                    has_error=False
+                    notification_type="summary_completed",
+                    has_error=summary_error
                 )
         
         logger.info(f"✅ 錄音 {recording_id} 處理完成")
@@ -661,6 +735,7 @@ async def process_recording_async(recording_id: str):
                         recording.user_id,
                         recording_id,
                         recording.title,
+                        notification_type="summary_completed",  # 使用 summary_completed 因為這是最終狀態
                         has_error=True
                     )
         except Exception as e2:

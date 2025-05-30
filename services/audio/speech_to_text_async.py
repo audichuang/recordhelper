@@ -182,6 +182,19 @@ class AsyncSpeechToTextService:
                         logger.info(f"📊 使用計算得到的音頻時長: {audio_duration:.2f}秒")
                     else:
                         logger.warning("⚠️ 無法獲取音頻時長信息")
+                else:
+                    # 檢查提供商返回的時長是否合理
+                    provider_duration = result.get('duration', 0)
+                    if audio_duration and provider_duration:
+                        # 如果提供商返回的時長與計算的時長差距太大（超過10%或相差超過5秒），使用計算的時長
+                        duration_diff = abs(provider_duration - audio_duration)
+                        duration_diff_percent = duration_diff / audio_duration if audio_duration > 0 else 0
+                        
+                        if duration_diff_percent > 0.1 or duration_diff > 5:
+                            logger.warning(f"⚠️ 提供商返回的時長({provider_duration:.2f}s)與計算時長({audio_duration:.2f}s)差距過大，使用計算時長")
+                            result['duration'] = audio_duration
+                        else:
+                            logger.info(f"✅ 提供商時長({provider_duration:.2f}s)與計算時長({audio_duration:.2f}s)一致")
                 
                 # 統一返回格式
                 transcription_text = result.get('transcript') or result.get('text') or ''

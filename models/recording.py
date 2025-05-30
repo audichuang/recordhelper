@@ -12,7 +12,10 @@ class RecordingStatus(PyEnum):
     """錄音處理狀態"""
     UPLOADING = "uploading"
     PROCESSING = "processing"
-    COMPLETED = "completed"
+    TRANSCRIBING = "transcribing"  # 逐字稿處理中
+    TRANSCRIBED = "transcribed"    # 逐字稿完成，摘要處理中
+    SUMMARIZING = "summarizing"    # 摘要處理中
+    COMPLETED = "completed"        # 全部完成
     FAILED = "failed"
 
 
