@@ -4,6 +4,7 @@ from .users import users_router
 from .recordings import recordings_router
 from .analysis import analysis_router
 from .system import system_router
+from .prompt_templates import router as prompt_templates_router
 
 
 def init_api_routes(app: FastAPI, config):
@@ -42,6 +43,13 @@ def init_api_routes(app: FastAPI, config):
         system_router,
         prefix="/api/system",
         tags=["系統"]
+    )
+    
+    # 提示模板路由
+    app.include_router(
+        prompt_templates_router,
+        prefix="/api/prompt-templates",
+        tags=["提示模板"]
     )
 
 

@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 import logging
 import uuid
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import or_
@@ -82,11 +83,27 @@ async def get_current_user(
         
         return user
         
-    except Exception as e:
-        logger.error(f"認證錯誤: {str(e)}")
+    except HTTPException:
+        raise
+    except jwt.ExpiredSignatureError:
+        logger.error("JWT令牌已過期")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="認證失敗"
+            detail="令牌已過期，請重新登入"
+        )
+    except jwt.InvalidTokenError as e:
+        logger.error(f"JWT令牌無效: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="無效的令牌"
+        )
+    except Exception as e:
+        logger.error(f"認證錯誤 - 類型: {type(e).__name__}, 詳情: {str(e)}")
+        import traceback
+        logger.error(f"錯誤堆疊: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"認證失敗: {str(e)}"
         )
 
 

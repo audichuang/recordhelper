@@ -57,6 +57,7 @@ from .user import User
 from .recording import Recording, RecordingStatus
 from .analysis_history import AnalysisHistory, AnalysisType, AnalysisStatus
 from .device_token import DeviceToken
+from .prompt_template import PromptTemplate
 
 __all__ = [
     'Base',
@@ -70,5 +71,6 @@ __all__ = [
     'AnalysisType',
     'AnalysisStatus',
     'DeviceToken',
+    'PromptTemplate',
     'AsyncSessionLocal'
 ] 

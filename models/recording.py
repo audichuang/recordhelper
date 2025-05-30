@@ -51,12 +51,16 @@ class Recording(Base):
     transcription_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     summary_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
+    # Prompt template 關聯
+    prompt_template_id: Mapped[int | None] = mapped_column(Integer, ForeignKey('prompt_templates.id'), nullable=True)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # 關聯關係
     user: Mapped["User"] = relationship("User", back_populates="recordings", lazy="selectin")
     analysis_histories: Mapped[list["AnalysisHistory"]] = relationship("AnalysisHistory", back_populates="recording", cascade="all, delete-orphan", lazy="selectin")
+    prompt_template: Mapped["PromptTemplate"] = relationship("PromptTemplate", back_populates="recordings", lazy="selectin")
     
     def __init__(self, user_id: uuid.UUID, title: str, original_filename: str, audio_data: bytes, file_size: int, format_str: str, mime_type: str, **kwargs):
         super().__init__(**kwargs)
