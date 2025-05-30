@@ -42,6 +42,9 @@ line-bot-sdk==3.8.0
 click==8.2.1
 python-dateutil==2.9.0.post0
 
+# 推送通知
+PyJWT[crypto]==2.10.1  # 支援 ES256 算法
+
 # 開發工具
 pytest==8.3.4
 pytest-asyncio==0.25.0 

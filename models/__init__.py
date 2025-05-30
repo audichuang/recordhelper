@@ -56,6 +56,7 @@ async def close_async_db():
 from .user import User
 from .recording import Recording, RecordingStatus
 from .analysis_history import AnalysisHistory, AnalysisType, AnalysisStatus
+from .device_token import DeviceToken
 
 __all__ = [
     'Base',
@@ -68,5 +69,6 @@ __all__ = [
     'AnalysisHistory',
     'AnalysisType',
     'AnalysisStatus',
+    'DeviceToken',
     'AsyncSessionLocal'
 ] 

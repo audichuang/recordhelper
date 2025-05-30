@@ -12,16 +12,63 @@ from sqlalchemy.future import select
 from sqlalchemy import desc
 from sqlalchemy.sql import func
 
-from models import User, Recording, get_async_db_session, RecordingStatus, AnalysisHistory, AnalysisType
+from models import User, Recording, get_async_db_session, RecordingStatus, AnalysisHistory, AnalysisType, DeviceToken
 from .auth import get_current_user
 from services.audio.speech_to_text_async import AsyncSpeechToTextService
 from services.ai.gemini_async import AsyncGeminiService
+from services.notifications.apns_service import apns_service
 from config import AppConfig
 
 logger = logging.getLogger(__name__)
 
 # 創建路由器
 recordings_router = APIRouter()
+
+
+async def send_push_notification_for_recording(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    recording_id: str,
+    recording_title: str,
+    has_error: bool = False
+):
+    """發送錄音處理完成的推送通知"""
+    try:
+        # 獲取用戶的所有活躍設備 Token
+        result = await session.execute(
+            select(DeviceToken).where(
+                DeviceToken.user_id == user_id,
+                DeviceToken.is_active == True,
+                DeviceToken.platform == "ios"
+            )
+        )
+        device_tokens = result.scalars().all()
+        
+        if not device_tokens:
+            logger.info(f"用戶 {user_id} 沒有註冊的設備 Token，跳過推送")
+            return
+        
+        # 發送推送通知到每個設備
+        for token in device_tokens:
+            success = await apns_service.send_recording_completed_notification(
+                device_token=token.token,
+                recording_id=recording_id,
+                recording_title=recording_title,
+                has_error=has_error
+            )
+            
+            if success:
+                # 更新最後使用時間
+                token.last_used_at = datetime.utcnow()
+            else:
+                # 如果發送失敗，可能需要停用該 token
+                logger.warning(f"推送通知失敗，設備 Token: {token.token[:10]}...")
+                
+        await session.commit()
+        
+    except Exception as e:
+        logger.error(f"發送推送通知時發生錯誤: {str(e)}")
+        # 不要讓推送通知的錯誤影響主要流程
 
 # Pydantic 模型
 class RecordingSummary(BaseModel):
@@ -583,6 +630,15 @@ async def process_recording_async(recording_id: str):
                 session.add(summary_history)
                 
                 await session.commit()
+                
+                # 發送推送通知
+                await send_push_notification_for_recording(
+                    session,
+                    recording.user_id,
+                    recording_id,
+                    recording.title,
+                    has_error=False
+                )
         
         logger.info(f"✅ 錄音 {recording_id} 處理完成")
         
@@ -598,6 +654,15 @@ async def process_recording_async(recording_id: str):
                 if recording:
                     recording.status = RecordingStatus.FAILED
                     await session.commit()
+                    
+                    # 發送失敗通知
+                    await send_push_notification_for_recording(
+                        session,
+                        recording.user_id,
+                        recording_id,
+                        recording.title,
+                        has_error=True
+                    )
         except Exception as e2:
             logger.error(f"❌ 更新錄音狀態為失敗時發生錯誤: {e2}")
     finally:

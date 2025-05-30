@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import logging
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, desc
 
-from models import User, Recording, get_async_db_session
+from models import User, Recording, DeviceToken, get_async_db_session
 from .auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,14 @@ class AppleBindingRequest(BaseModel):
     authorization_code: str
     email: Optional[str] = None
     full_name: Optional[str] = None
+
+class DeviceTokenRequest(BaseModel):
+    device_token: str
+    platform: str = "ios"  # ios, android
+    device_name: Optional[str] = None
+    device_model: Optional[str] = None
+    os_version: Optional[str] = None
+    app_version: Optional[str] = None
 
 
 @users_router.get("/profile", response_model=UserProfile)
@@ -219,4 +228,96 @@ async def unbind_apple_id(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="解除綁定失敗"
+        )
+
+
+@users_router.post("/device-token")
+async def register_device_token(
+    token_data: DeviceTokenRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """註冊或更新設備推送 Token"""
+    try:
+        # 檢查是否已存在相同的 token
+        existing_token = await db.execute(
+            select(DeviceToken).where(
+                DeviceToken.token == token_data.device_token
+            )
+        )
+        device_token = existing_token.scalar_one_or_none()
+        
+        if device_token:
+            # 更新現有 token
+            device_token.user_id = current_user.id
+            device_token.platform = token_data.platform
+            device_token.device_name = token_data.device_name
+            device_token.device_model = token_data.device_model
+            device_token.os_version = token_data.os_version
+            device_token.app_version = token_data.app_version
+            device_token.is_active = True
+            device_token.last_used_at = datetime.utcnow()
+        else:
+            # 創建新的 token
+            device_token = DeviceToken(
+                user_id=current_user.id,
+                token=token_data.device_token,
+                platform=token_data.platform,
+                device_name=token_data.device_name,
+                device_model=token_data.device_model,
+                os_version=token_data.os_version,
+                app_version=token_data.app_version
+            )
+            db.add(device_token)
+        
+        await db.commit()
+        
+        logger.info(f"✅ 註冊設備 Token 成功: 用戶 {current_user.username}, 平台 {token_data.platform}")
+        return {"message": "設備 Token 註冊成功"}
+        
+    except Exception as e:
+        logger.error(f"註冊設備 Token 錯誤: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="註冊設備 Token 失敗"
+        )
+
+
+@users_router.delete("/device-token/{token}")
+async def unregister_device_token(
+    token: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db_session)
+):
+    """取消註冊設備推送 Token"""
+    try:
+        # 查找並刪除 token
+        result = await db.execute(
+            select(DeviceToken).where(
+                DeviceToken.token == token,
+                DeviceToken.user_id == current_user.id
+            )
+        )
+        device_token = result.scalar_one_or_none()
+        
+        if not device_token:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="設備 Token 不存在"
+            )
+        
+        await db.delete(device_token)
+        await db.commit()
+        
+        return {"message": "設備 Token 已刪除"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"刪除設備 Token 錯誤: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="刪除設備 Token 失敗"
         ) 

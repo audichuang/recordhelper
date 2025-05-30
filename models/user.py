@@ -28,6 +28,7 @@ class User(Base):
     
     # 關聯關係
     recordings: Mapped[list["Recording"]] = relationship("Recording", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
+    device_tokens: Mapped[list["DeviceToken"]] = relationship("DeviceToken", back_populates="user", lazy="selectin", cascade="all, delete-orphan")
     
     def __init__(self, username: str, email: str, password: str = None, **kwargs):
         super().__init__(**kwargs)

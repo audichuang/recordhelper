@@ -115,6 +115,14 @@ REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
+# 📱 Apple推送通知配置 (APNS)
+# 用於向iOS應用發送錄音處理完成通知
+APNS_KEY_ID=你的_APNS_金鑰_ID
+APNS_TEAM_ID=你的_Apple開發團隊_ID
+APNS_BUNDLE_ID=com.audichuang.app
+APNS_AUTH_KEY_PATH=path/to/AuthKey_XXXXX.p8
+APNS_USE_SANDBOX=true  # true=開發環境, false=生產環境
+
 # 🚀 運行配置
 HOST=0.0.0.0
 PORT=5000
