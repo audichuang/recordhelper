@@ -7,6 +7,7 @@ import aiohttp
 import aiofiles
 from typing import Dict, Any, Optional
 from pathlib import Path
+import certifi
 
 from config import AppConfig
 
@@ -56,7 +57,8 @@ class AsyncWhisperService:
                 'Authorization': f'Bearer {self.api_key}'
             }
             
-            async with aiohttp.ClientSession() as session:
+            connector = aiohttp.TCPConnector(ssl=certifi.where())
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     f"{self.base_url}/audio/transcriptions",
                     data=data,
@@ -96,7 +98,8 @@ class AsyncWhisperService:
                 'Authorization': f'Bearer {self.api_key}'
             }
             
-            async with aiohttp.ClientSession() as session:
+            connector = aiohttp.TCPConnector(ssl=certifi.where())
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(
                     f"{self.base_url}/models",
                     headers=headers,

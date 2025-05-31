@@ -1,15 +1,19 @@
 """
-異步 AssemblyAI 語音識別服務 - 使用官方 SDK
+異步 AssemblyAI 語音識別服務
 """
 
 import os
 import logging
 import asyncio
-import tempfile
+import aiohttp
+import aiofiles
+import subprocess
 from typing import Dict, Any, Optional, List
 from pathlib import Path
+import uuid
+import tempfile
+import certifi
 
-import assemblyai as aai
 from config import AppConfig
 from .srt_formatter import SRTFormatter
 
@@ -20,7 +24,7 @@ MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024
 
 
 class AsyncAssemblyAIService:
-    """異步 AssemblyAI 服務 - 使用官方 SDK"""
+    """異步 AssemblyAI 服務"""
     
     def __init__(self, config: AppConfig):
         self.config = config
@@ -32,11 +36,12 @@ class AsyncAssemblyAIService:
         
         if not self.api_keys:
             logger.warning("⚠️ AssemblyAI API 金鑰未設置")
-            self.api_keys = []
+            self.api_keys = []  # 設為空列表而不是拋出異常
         else:
             logger.info(f"✅ AssemblyAI 服務初始化成功，已載入 {len(self.api_keys)} 個 API 金鑰")
         
         self.current_key_index = 0
+        self.base_url = "https://api.assemblyai.com/v2"
         
         # 模型配置
         self.speech_model = config.assemblyai_model if hasattr(config, 'assemblyai_model') else "best"
@@ -117,6 +122,140 @@ class AsyncAssemblyAIService:
             logger.error(f"壓縮音檔時發生錯誤: {e}")
             raise
     
+    async def _upload_file(self, file_path: str, api_key: str) -> str:
+        """
+        上傳檔案到 AssemblyAI
+        
+        Args:
+            file_path: 檔案路徑
+            api_key: API 金鑰
+            
+        Returns:
+            上傳後的檔案 URL
+        """
+        headers = {
+            'authorization': api_key
+        }
+        
+        async with aiofiles.open(file_path, 'rb') as f:
+            file_data = await f.read()
+        
+        connector = aiohttp.TCPConnector(ssl=certifi.where())
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(
+                f"{self.base_url}/upload",
+                headers=headers,
+                data=file_data,
+                timeout=aiohttp.ClientTimeout(total=600)  # 10分鐘超時
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"檔案上傳失敗 {response.status}: {error_text}")
+                
+                result = await response.json()
+                upload_url = result.get('upload_url')
+                
+                if not upload_url:
+                    raise Exception("上傳失敗：未獲得檔案 URL")
+                
+                logger.info(f"檔案上傳成功: {upload_url}")
+                return upload_url
+    
+    async def _create_transcript(self, audio_url: str, api_key: str) -> str:
+        """
+        創建轉錄任務
+        
+        Args:
+            audio_url: 音檔 URL
+            api_key: API 金鑰
+            
+        Returns:
+            轉錄任務 ID
+        """
+        headers = {
+            'authorization': api_key,
+            'content-type': 'application/json'
+        }
+        
+        # 配置轉錄選項
+        data = {
+            'audio_url': audio_url,
+            'language_code': self.language if self.language != 'auto' else None,
+            'speech_model': self.speech_model,
+            'speaker_labels': True,  # 啟用說話者識別
+            'punctuate': True,       # 自動加標點符號
+            'format_text': True,     # 格式化文字
+            'language_detection': self.language == 'auto',
+        }
+        
+        connector = aiohttp.TCPConnector(ssl=certifi.where())
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(
+                f"{self.base_url}/transcript",
+                headers=headers,
+                json=data,
+                timeout=aiohttp.ClientTimeout(total=60)
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"創建轉錄任務失敗 {response.status}: {error_text}")
+                
+                result = await response.json()
+                transcript_id = result.get('id')
+                
+                if not transcript_id:
+                    raise Exception("創建轉錄任務失敗：未獲得任務 ID")
+                
+                logger.info(f"轉錄任務已創建: {transcript_id}")
+                return transcript_id
+    
+    async def _poll_transcript(self, transcript_id: str, api_key: str) -> Dict[str, Any]:
+        """
+        輪詢轉錄結果
+        
+        Args:
+            transcript_id: 轉錄任務 ID
+            api_key: API 金鑰
+            
+        Returns:
+            轉錄結果
+        """
+        headers = {
+            'authorization': api_key
+        }
+        
+        max_attempts = 300  # 最多等待 5 分鐘（每秒一次）
+        attempt = 0
+        
+        connector = aiohttp.TCPConnector(ssl=certifi.where())
+        async with aiohttp.ClientSession(connector=connector) as session:
+            while attempt < max_attempts:
+                async with session.get(
+                    f"{self.base_url}/transcript/{transcript_id}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"獲取轉錄結果失敗 {response.status}: {error_text}")
+                    
+                    result = await response.json()
+                    status = result.get('status')
+                    
+                    if status == 'completed':
+                        logger.info("轉錄完成")
+                        return result
+                    elif status == 'error':
+                        error_msg = result.get('error', '未知錯誤')
+                        raise Exception(f"轉錄失敗: {error_msg}")
+                    else:
+                        # 處理中，等待
+                        logger.debug(f"轉錄狀態: {status}, 等待中...")
+                        await asyncio.sleep(1)
+                        attempt += 1
+        
+        raise Exception("轉錄超時：處理時間過長")
+    
     async def transcribe(self, file_path: str, compress_if_needed: bool = True) -> Dict[str, Any]:
         """
         轉錄音頻文件
@@ -152,71 +291,40 @@ class AsyncAssemblyAIService:
                 api_key = self._get_next_api_key()
                 
                 try:
-                    # 設定 API 金鑰
-                    aai.settings.api_key = api_key
+                    # 1. 上傳檔案
+                    logger.info("正在上傳音檔...")
+                    audio_url = await self._upload_file(file_path, api_key)
                     
-                    # 配置轉錄選項
-                    config = aai.TranscriptionConfig(
-                        language_code=self.language if self.language != 'auto' else None,
-                        speech_model=aai.SpeechModel.best if self.speech_model == 'best' else aai.SpeechModel.nano,
-                        speaker_labels=True,  # 啟用說話者識別
-                        punctuate=True,       # 自動加標點符號
-                        format_text=True,     # 格式化文字
-                        language_detection=self.language == 'auto',
-                    )
+                    # 2. 創建轉錄任務
+                    logger.info("正在創建轉錄任務...")
+                    transcript_id = await self._create_transcript(audio_url, api_key)
                     
-                    # 創建轉錄器
-                    transcriber = aai.Transcriber(config=config)
-                    
-                    # 執行轉錄（官方 SDK 會自動處理上傳、輪詢等）
-                    logger.info("正在上傳並轉錄音檔...")
-                    
-                    # 在異步環境中執行同步操作
-                    loop = asyncio.get_event_loop()
-                    transcript = await loop.run_in_executor(
-                        None, 
-                        transcriber.transcribe, 
-                        file_path
-                    )
-                    
-                    # 檢查錯誤
-                    if transcript.status == aai.TranscriptStatus.error:
-                        raise Exception(f"轉錄失敗: {transcript.error}")
-                    
-                    # 確保轉錄完成
-                    if transcript.status != aai.TranscriptStatus.completed:
-                        raise Exception(f"轉錄未完成，狀態: {transcript.status}")
+                    # 3. 輪詢結果
+                    logger.info("正在等待轉錄結果...")
+                    result = await self._poll_transcript(transcript_id, api_key)
                     
                     # 處理結果
-                    if not transcript.text:
+                    transcript = result.get('text', '').strip()
+                    if not transcript:
                         raise Exception("轉錄結果為空")
                     
                     # 計算音頻時長（毫秒轉秒）
-                    # 注意：AssemblyAI 的 audio_duration 有時不準確，我們從單詞時間戳計算
-                    duration = None
-                    if transcript.words and len(transcript.words) > 0:
-                        # 從最後一個單詞的結束時間計算實際時長
-                        last_word = transcript.words[-1]
-                        duration = last_word.end / 1000  # 毫秒轉秒
-                        logger.info(f"🔍 從單詞時間戳計算時長: {duration:.2f}s")
-                    elif transcript.audio_duration:
-                        # 備用：使用 API 返回的時長
-                        duration = transcript.audio_duration / 1000
-                        logger.info(f"🔍 使用 API 返回的時長: {duration:.2f}s")
+                    duration_ms = result.get('audio_duration', 0)
+                    duration = duration_ms / 1000 if duration_ms else None
                     
                     # 調試信息
-                    logger.info(f"🔍 AssemblyAI 原始時長數據: audio_duration={transcript.audio_duration}ms, 計算後={duration}s")
+                    logger.info(f"🔍 AssemblyAI 原始時長數據: audio_duration={duration_ms}ms, 轉換後={duration}s")
                     
                     # 處理單詞時間戳
                     words = []
-                    if transcript.words:
-                        for word_info in transcript.words:
+                    if result.get('words'):
+                        for word_info in result['words']:
                             words.append({
-                                'text': word_info.text,
-                                'start': word_info.start / 1000,  # 毫秒轉秒
-                                'end': word_info.end / 1000,
-                                'confidence': word_info.confidence,
-                                'speaker': word_info.speaker if hasattr(word_info, 'speaker') else None
+                                'text': word_info.get('text', ''),
+                                'start': word_info.get('start', 0) / 1000,  # 毫秒轉秒
+                                'end': word_info.get('end', 0) / 1000,
+                                'confidence': word_info.get('confidence', 0),
+                                'speaker': word_info.get('speaker')
                             })
                     
                     # 生成 SRT 格式字幕
@@ -224,20 +332,14 @@ class AsyncAssemblyAIService:
                     if words:
                         srt_content = SRTFormatter.generate_srt_from_words(words, sentence_level=True)
                     
-                    # 獲取語言代碼（如果有自動偵測）
-                    detected_language = None
-                    if hasattr(transcript, 'language_confidence_threshold'):
-                        # 從 transcript 的 JSON 資料中獲取語言資訊
-                        detected_language = getattr(transcript, 'language_code', None)
-                    
                     # 格式化返回結果
                     return {
-                        'transcript': transcript.text,
-                        'language': detected_language or self.language,
+                        'transcript': transcript,
+                        'language': result.get('language_code', self.language),
                         'duration': duration,
                         'words': words,
-                        'confidence': getattr(transcript, 'confidence', None),
-                        'speakers': getattr(transcript, 'speakers', None),
+                        'confidence': result.get('confidence'),
+                        'speakers': result.get('speakers'),
                         'provider': 'assemblyai',
                         'model': self.speech_model,
                         'api_key_index': self.api_keys.index(api_key),
@@ -280,27 +382,32 @@ class AsyncAssemblyAIService:
                     "error": "沒有配置 API 金鑰"
                 }
             
-            # 設定 API 金鑰
-            aai.settings.api_key = self.api_keys[0]
+            api_key = self.api_keys[0]
+            headers = {
+                'authorization': api_key
+            }
             
-            # 測試 API 連接 - 創建一個簡單的配置來測試
-            try:
-                config = aai.TranscriptionConfig()
-                transcriber = aai.Transcriber(config=config)
-                # 只是測試能否創建 transcriber，不實際轉錄
-                return {
-                    "available": True,
-                    "model": self.speech_model,
-                    "language": self.language,
-                    "provider": "assemblyai",
-                    "api_keys_count": len(self.api_keys),
-                    "using_official_sdk": True
-                }
-            except Exception as e:
-                return {
-                    "available": False,
-                    "error": f"API 連接錯誤: {str(e)}"
-                }
+            # 測試 API 連接
+            connector = aiohttp.TCPConnector(ssl=certifi.where())
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(
+                    f"{self.base_url}/",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status in [200, 404]:  # 404 是預期的，因為根路徑可能不存在
+                        return {
+                            "available": True,
+                            "model": self.speech_model,
+                            "language": self.language,
+                            "provider": "assemblyai",
+                            "api_keys_count": len(self.api_keys)
+                        }
+                    else:
+                        return {
+                            "available": False,
+                            "error": f"API 響應錯誤: {response.status}"
+                        }
                         
         except Exception as e:
             return {
